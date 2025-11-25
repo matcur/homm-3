@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome to clj-starting</title>
+  <style class="hex-styles">
+      /*:root {*/
+      /*    --triangle-angle-deg: 11.5;*/
+      /*    --hex-height: 40px;*/
+      /*    --hex-width: 50px;*/
+      /*    --hex-triangle-height-value: calc((var(--hex-width) - var(--hex-height)) / 2);*/
+      /*    --hex-triangle-height: calc(var(--hex-triangle-height-value) * 1px);*/
+      /*    --half-width: calc(var(--hex-width) / 2);*/
+      /*    --triangle-gipotinoze-value-for-js: calc(var(--half-width) * var(--half-width) + var(--hex-triangle-height-value) * var(--hex-triangle-height-value));*/
+      /*    --triangle-gipotinoze: calc(sqrt(32) * 1px);*/
+      /*    --hipotinoze: var(--triangle-gipotinoze);*/
+      /*    --triangle-angle: calc(var(--half-width) / var(--triangle-gipotinoze));*/
+      /*}*/
+      :root {
+          --hex-height: 40px;
+          --hex-triangle-height: 5px;
+          --hex-width: 50px;
+          --hipotinoze: 26px;
+          --triangle-angle-deg: 11.5;
+          --hexHeight: 40px;
+          --hexWidth: 50px;
+          --hexTriangleHeight: calc(calc((var(--hexWidth) - var(--hexHeight))) / 2);
+          --halfWidth: calc(var(--hexWidth) / 2);
+          --triangleGipotinoze: sqrt(calc(var(--halfWidth) * var(--halfWidth) + var(--hexTriangleHeight) * var(--hexTriangleHeight)));
+          --triangleAngle: calc(var(--halfWidth) / var(--triangleGipotinoze));
+      }
+      body {
+          margin: 0;
+      }
+      .hex-cell {
+          width: var(--hex-width);
+          height: var(--hex-height);
+          border-left: 1.5px solid green;
+          margin-bottom: calc(var(--hex-triangle-height) / 2);
+          margin-top: calc(calc(var(--hex-triangle-height) / 2) - 1px);
+          position: relative;
+      }
+      .line {
+          position: absolute;
+          width: var(--hipotinoze);
+          height: 1px;
+          background: green;
+      }
+      .top-left {
+          transform: rotate(calc(var(--triangle-angle-deg) * -1deg));
+          transform-origin: top left;
+          left: -1px
+      }
+      .top-right {
+          transform: rotate(calc(var(--triangle-angle-deg) * 1deg));
+          transform-origin: top right;
+          right: -1px;
+      }
+      .bottom-left {
+          transform: rotate(calc(var(--triangle-angle-deg) * 1deg));
+          transform-origin: top left;
+          left: 0;
+          bottom: 0;
+      }
+      .bottom-right {
+          transform: rotate(calc(var(--triangle-angle-deg) * -1deg));
+          transform-origin: top right;
+          right: 0;
+          bottom: 0;
+      }
+      .hexes {
+          position: relative;
+      }
+      .even-row .hex-cell {
+          border-right: 0;
+      }
+      .row .hex-cell:last-child {
+          border-right: 1.5px solid green;
+      }
+      .game {
+          height: 100vh;
+          width: 100vw;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-direction: column;
+      }
+      .stack {
+          position: absolute;
+          transform: translate(-50%, -50%);
+      }
+      .available-cell {
+          background-color: rgba(0, 0, 0, .15);
+      }
+      .attackable-cell {
+          background-color: rgba(255, 0, 0, 0.5);
+      }
+      .battlefield {
+          height: 80%;
+          width: 70%;
+          position: relative;
+      }
+      .canvas {
+          position: absolute;
+      }
+      .background {
+          bottom: 0;
+      }
+      .buttons {
+          display: flex;
+          gap: 8px;
+          position: absolute;
+          bottom: 20px;
+          right: 30px;
+      }
+      .book {
+          display: flex;
+          position: relative;
+          height: 80%;
+          width: 80%;
+          top: 10%;
+          left: 10%;
+          padding: 10%;
+          background: #FFE55DFF;
+          border-radius: 8px;
+          border: 1px solid #caa757;
+          transition: all 0.15s ease-in-out;
+      }
+      .spell {
+          cursor: pointer;
+      }
+      .book {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+      }
+      .closed-book {
+          display: none;
+      }
+      .queue {
+          position: absolute;
+          bottom: 10px;
+          left: 50%;
+          transform: translateX(-50%);
+      }
+      .fps {
+          color: #000;
+          font-weight: 500;
+      }
+  </style>
+</head>
+<body>
+<section class="schedule-section">
+  <div class="game">
+    <div class="battlefield" style="width: 1440px; height: 919px;">
+      <canvas width="1440" height="919" class="canvas background"></canvas>
+      <canvas width="1440" height="919" class="canvas hexes"></canvas>
+      <canvas width="1440" height="919" class="canvas available-hexes"></canvas>
+      <canvas width="1440" height="919" class="canvas dead-unites"></canvas>
+      <canvas width="1440" height="919" class="canvas available-hover"></canvas>
+      <canvas width="1440" height="919" class="canvas units"></canvas>
+      <canvas width="1440" height="919" class="canvas animations"></canvas>
+      <canvas width="1440" height="919" class="canvas ended"></canvas>
+      <canvas width="1440" height="60" class="queue"></canvas>
+      <div class="buttons">
+        <span class="fps">FPS: 0</span>
+        <button class="defence">Defence</button>
+        <button class="wait">Wait</button>
+        <button class="book-btn">Book</button>
+        <button class="next-stack" style="display: none">Next stack</button>
+        <button class="end-tactic" style="display: none">End tactic</button>
+        <button class="attack-type" style="display: none">Hand attack</button>
+      </div>
+      <div class="book closed-book"></div>
+    </div>
+  </div>
+</section>
+<script src="https://cdn.jsdelivr.net/npm/jsog@1.0.7/lib/JSOG.min.js"></script>
+<script src="../dist/game.js"></script>
+</body>
+</html>
