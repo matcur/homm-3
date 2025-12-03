@@ -41,16 +41,6 @@ type Stack = RealStack | Cloned
 type RealStackType = RealStack["type"]
 type StackType = Stack["type"]
 
-const durableEffects = [
-  "aging",
-  "rage",
-  "weakness",
-  "lucky",
-  "accuracy",
-  "slow",
-  "hast",
-] as const
-
 type Effect =
   | { type: "freeze", causer: Stack }
   | { type: "aging", duration: number }
@@ -457,15 +447,30 @@ function foe(): Side {
 
 function nextRound() {
   [...ally().army, ...foe().army].forEach(stack => {
-    durableEffects.forEach(effect => {
-      const target = effectIn(stack, effect)
-      if (!target) {
-        return
-      }
-      target.duration -= 1
-      if (target.duration <= 0) {
-        stack = toRealStack(stack)
-        stack.effects.splice(stack.effects.indexOf(target), 1)
+    toRealStack(stack).effects.forEach(effect => {
+      const type = effect.type
+      switch (type) {
+        case "aging":
+        case "rage":
+        case "weakness":
+        case "lucky":
+        case "accuracy":
+        case "slow":
+        case "hypnotize":
+        case "forgetfulness":
+        case "antiMagic":
+        case "bless":
+        case "airShield":
+        case "hast": {
+          effect.duration -= 1
+          if (effect.duration <= 0) {
+            stack = toRealStack(stack)
+            stack.effects.splice(stack.effects.indexOf(effect), 1)
+          }
+          return;
+        }
+        case "freeze":
+          return
       }
     })
   })
