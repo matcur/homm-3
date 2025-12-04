@@ -24,6 +24,9 @@ type RealStack = (BaseStack & {
     | "zombie"
     | "dragon"
     | "airElement"
+    | "fireElement"
+    | "earthElement"
+    | "waterElement"
     | "archer"
     | "dendroid"
     | "pikeman"
@@ -119,6 +122,9 @@ function stackWidth(stack: Stack): number {
     case "enhancedArcher":
     case "ballista":
     case "airElement":
+    case "fireElement":
+    case "earthElement":
+    case "waterElement":
     case "aidTent":
       return 1
     default:
@@ -136,6 +142,9 @@ const speeds: Record<RealStackType, number> = {
   archer: 5,
   enhancedArcher: 7,
   airElement: 8,
+  fireElement: 7,
+  waterElement: 7,
+  earthElement: 5,
   dendroid: 5,
   zombie: 4,
   dragon: 11,
@@ -184,6 +193,9 @@ const stackHealth: Record<RealStackType, number> = {
   gargoyle: 25,
   griffin: 35,
   airElement: 70,
+  fireElement: 75,
+  waterElement: 80,
+  earthElement: 100,
   vampire: 50,
   zombie: 10,
   dragon: 200,
@@ -298,6 +310,12 @@ function attackOf(args: SingleAttackArgs): number {
         return calculate(40, 50)
       case "airElement":
         return calculate(10, 35)
+      case "fireElement":
+        return calculate(15, 35)
+      case "waterElement":
+        return calculate(20, 25)
+      case "earthElement":
+        return calculate(35, 45)
       case "aidTent":
       case "ballista":
         return 0
@@ -325,6 +343,9 @@ function attackOf(args: SingleAttackArgs): number {
     case "airElement":
     case "devil":
     case "aidTent":
+    case "fireElement":
+    case "waterElement":
+    case "earthElement":
       return 0
     default:
       never(stackType)
@@ -345,12 +366,15 @@ type MagicEffectSpell =
   | "forgetfulness"
 
 type RequiredPositionSpell = MagicAttackSpell | MagicEffectSpell | "forceField"
-type Spell = RequiredPositionSpell | "summonAirElement"
+type Spell = RequiredPositionSpell | "summonAirElement" | "summonFireElement" | "summonEarthElement" | "summonWaterElement"
 
 const spellSchool: Record<Spell, MagicSchool> = {
   forgetfulness: "water",
   antiMagic: "earth",
   summonAirElement: "air",
+  summonFireElement: "air",
+  summonEarthElement: "earth",
+  summonWaterElement: "water",
   hypnotize: "earth",
   forceField: "earth",
   fireWall: "fire",
@@ -417,6 +441,9 @@ const defences: Record<RealStackType, number> = {
   vampire: 5,
   zombie: 3,
   airElement: 7,
+  fireElement: 6,
+  waterElement: 5,
+  earthElement: 8,
   dragon: 8,
   archer: 4,
   enhancedArcher: 6,
@@ -1457,7 +1484,7 @@ function skillIn<T extends Skill["type"]>(side: Side | undefined, type: T): Extr
   }
 }
 
-function unitKind(stack: Stack): "undead" | "alive" | "stone" | "machine" {
+function unitKind(stack: Stack): "undead" | "alive" | "stone" | "machine" | "nature" {
   const type = stack.type
   switch (type) {
     case "ballista":
@@ -1475,9 +1502,13 @@ function unitKind(stack: Stack): "undead" | "alive" | "stone" | "machine" {
     case "dragon":
     case "dendroid":
     case "angel":
-    case "airElement":
     case "devil":
       return "alive"
+    case "airElement":
+    case "fireElement":
+    case "waterElement":
+    case "earthElement":
+      return "nature"
     case "clone":
       return unitKind(stack.copy)
     default:
@@ -1877,6 +1908,9 @@ function canFireTwice(stack: Stack): boolean {
     case "devil":
     case "aidTent":
     case "airElement":
+    case "fireElement":
+    case "earthElement":
+    case "waterElement":
       return false
     case "clone":
       return canFireTwice(stack.copy)
@@ -1906,6 +1940,9 @@ function canFire(stack: Stack): boolean {
     case "devil":
     case "aidTent":
     case "airElement":
+    case "fireElement":
+    case "earthElement":
+    case "waterElement":
       return false
     case "clone":
       return canFire(stack.copy)
@@ -2366,33 +2403,42 @@ function hasAntiMagic(stack?: Stack): boolean {
   return Boolean(stack && effectIn(toRealStack(stack), "antiMagic"));
 }
 
+function summonStack(stack: Stack) {
+  let newPosition: Position | undefined = undefined
+  if (currentSide() === ally()) {
+    for (let i = 0; i <= lastRowIndex; i++) {
+      const candidate = {row: i, column: 0};
+      if (!stackAtPosition(candidate)) {
+        newPosition = candidate
+        break
+      }
+    }
+  } else {
+    for (let i = 0; i <= lastRowIndex; i++) {
+      const candidate = {row: i, column: lastColumnIndex};
+      if (!stackAtPosition(candidate)) {
+        newPosition = candidate
+        break
+      }
+    }
+  }
+  if (!newPosition) {
+    throw new Error("Implement free hex search by columns")
+  }
+  currentSide().army.push(stack)
+  hexes.push({...newPosition, stack: stack, type: "stack"})
+}
+
 function spellSelected(spell: Spell) {
-  if (spell === "summonAirElement") {
-    const airElement = stackOf("airElement", 10);
-    currentSide().army.push(airElement)
-    let newPosition: Position | undefined = undefined
-    if (currentSide() === ally()) {
-      for (let i = 0; i <= lastRowIndex; i++) {
-        const candidate = {row: i, column: 0};
-        if (!stackAtPosition(candidate)) {
-          newPosition = candidate
-          break
-        }
-      }
-    } else {
-      for (let i = 0; i <= lastRowIndex; i++) {
-        const candidate = {row: i, column: lastColumnIndex};
-        if (!stackAtPosition(candidate)) {
-          newPosition = candidate
-          break
-        }
-      }
-    }
-    if (!newPosition) {
-      throw new Error("Implement free hex search by columns")
-    }
-    hexes.push({...newPosition, stack: airElement, type: "stack"})
-    return
+  switch (spell) {
+    case "summonAirElement":
+      return summonStack(stackOf("airElement", 10))
+    case "summonFireElement":
+      return summonStack(stackOf("fireElement", 10))
+    case "summonEarthElement":
+      return summonStack(stackOf("earthElement", 12))
+    case "summonWaterElement":
+      return summonStack(stackOf("waterElement", 11))
   }
   if (spellLevel(spell) === 3) {
     switch (spell) {
