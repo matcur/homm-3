@@ -344,11 +344,13 @@ type MagicEffectSpell =
   | "antiMagic"
   | "forgetfulness"
 
-type Spell = MagicAttackSpell | MagicEffectSpell | "forceField"
+type RequiredPositionSpell = MagicAttackSpell | MagicEffectSpell | "forceField"
+type Spell = RequiredPositionSpell | "summonAirElement"
 
 const spellSchool: Record<Spell, MagicSchool> = {
   forgetfulness: "water",
   antiMagic: "earth",
+  summonAirElement: "air",
   hypnotize: "earth",
   forceField: "earth",
   fireWall: "fire",
@@ -727,7 +729,7 @@ function currentSideName() {
 function gameQueue(): Stack[] {
   let elements: QueueElement[]
   switch (game.type) {
-    case "spelling":
+    case "gameSpelling":
     case "battle":
       elements = [
         ...mapArmyToQueue(game.ally),
@@ -1271,7 +1273,7 @@ function makeAlly(): Side {
       stackOf("dragon", 1),
     ],
     spells: [
-      "forgetfulness",
+      "summonAirElement",
     ],
   }
 
@@ -1520,11 +1522,6 @@ interface CloseAttackArgs {
   attacker: CloseAttackMember
 }
 
-interface SpellSelectedAction {
-  type: "spellSelected"
-  spell: Spell
-}
-
 type BaseAction =
   | { type: "closeAttack", targetStack: Stack }
   | { type: "receiveDamage", receiver: Stack, damage: number }
@@ -1548,14 +1545,13 @@ type BaseAction =
 type BroadcastAction =
   | { type: "clickAt", targetPosition: ClickedHex, nextSelectedPosition: Position }
   | { type: "select", stackPosition: Position }
-  | SpellSelectedAction
   | FireAtAction
   | FireTwiceAtAction
   | { type: "moveTo", position: Position }
   | { type: "tryHealAndNextTurn", stackPosition: Position, value: number }
   | { type: "nextTurn" }
   | { type: "empty" }
-  | { type: "spelling", spell: Spell, position: Position }
+  | { type: "spelling", spell: RequiredPositionSpell, position: Position }
   | { type: "resistance", stackPoint: Point }
   | { type: "cloneAttacked", stack: Cloned }
 
@@ -2370,46 +2366,73 @@ function hasAntiMagic(stack?: Stack): boolean {
   return Boolean(stack && effectIn(toRealStack(stack), "antiMagic"));
 }
 
+function spellSelected(spell: Spell) {
+  if (spell === "summonAirElement") {
+    const airElement = stackOf("airElement", 10);
+    currentSide().army.push(airElement)
+    let newPosition: Position | undefined = undefined
+    if (currentSide() === ally()) {
+      for (let i = 0; i <= lastRowIndex; i++) {
+        const candidate = {row: i, column: 0};
+        if (!stackAtPosition(candidate)) {
+          newPosition = candidate
+          break
+        }
+      }
+    } else {
+      for (let i = 0; i <= lastRowIndex; i++) {
+        const candidate = {row: i, column: lastColumnIndex};
+        if (!stackAtPosition(candidate)) {
+          newPosition = candidate
+          break
+        }
+      }
+    }
+    if (!newPosition) {
+      throw new Error("Implement free hex search by columns")
+    }
+    hexes.push({...newPosition, stack: airElement, type: "stack"})
+    return
+  }
+  if (spellLevel(spell) === 3) {
+    switch (spell) {
+      // allow user to peek a spell hex
+      case "lightning":
+      case "arrow":
+      case "frostRing":
+      case "clone":
+      case "fireWall":
+      case "forceField":
+      case "antiMagic":
+      case "hypnotize":
+        game = {...game, type: "gameSpelling", spell}
+        return
+      case "forgetfulness":
+      case "slow": {
+        const caster = currentSide()
+        ensureAdded(game.heroesCastedSpell, caster.hero)
+        applyMagicEffect({caster, spell, targets: stackEnemy(selected()).army})
+        return
+      }
+      case "hast":
+      case "bless":
+      case "rage":
+      case "airShield": {
+        const caster = currentSide()
+        ensureAdded(game.heroesCastedSpell, caster.hero)
+        applyMagicEffect({caster, spell, targets: caster.army})
+        return
+      }
+      default:
+        never(spell)
+    }
+  }
+  game = {...game, type: "gameSpelling", spell}
+}
+
 async function doAction(action: Action): Promise<void> {
   increaseSeed(1)
   switch (action.type) {
-    case "spellSelected": {
-      const spell = action.spell
-      if (spellLevel(spell) === 3) {
-        switch (spell) {
-          case "lightning":
-          case "arrow":
-          case "frostRing":
-          case "clone":
-          case "fireWall":
-          case "forceField":
-          case "antiMagic":
-          case "hypnotize":
-            game = {...game, type: "spelling", spell}
-            return
-          case "forgetfulness":
-          case "slow": {
-            const caster = currentSide()
-            ensureAdded(game.heroesCastedSpell, caster.hero)
-            applyMagicEffect({caster, spell, targets: stackEnemy(selected()).army})
-            return
-          }
-          case "hast":
-          case "bless":
-          case "rage":
-          case "airShield": {
-            const caster = currentSide()
-            ensureAdded(game.heroesCastedSpell, caster.hero)
-            applyMagicEffect({caster, spell, targets: caster.army})
-            return
-          }
-          default:
-            never(spell)
-        }
-      }
-      game = {...game, type: "spelling", spell}
-      return
-    }
     case "fireTwiceAt":
     case "fireAt": {
       const targetStack = stackAtPosition(action.hexPosition)
@@ -4123,14 +4146,12 @@ function drawBattlefield(timestamp: number) {
       font: "50px Arial",
     })
   }
-  if (game.type === "spelling") {
+  if (game.type === "gameSpelling") {
     const spell = game.spell
     switch (spell) {
       case "fireWall":
       case "forceField":
       case "frostRing":
-        drawAvailableHexes([])
-        break
       case "lightning":
       case "arrow":
       case "slow":
@@ -4282,9 +4303,8 @@ function openBook() {
     element.innerText = spell
     element.addEventListener("click", () => {
       closeBook()
-      const action: SpellSelectedAction = {type: "spellSelected", spell}
-      doAction(action)
-      broadcastEvent({type: "action", action})
+      spellSelected(spell)
+      broadcastEvent({type: "spellSelected", spell})
     })
     book.appendChild(element)
   })
@@ -4300,7 +4320,7 @@ function selected(): Stack {
 
 type BaseGame =
   | { type: "battle" }
-  | { type: "spelling", spell: Spell }
+  | { type: "gameSpelling", spell: RequiredPositionSpell }
   | { type: "tactic", side: Side, level: number }
 
 type Game = BaseGame & {
@@ -4398,6 +4418,7 @@ const playingSideName: "ally" | "foe" = (new URL(window.location.href).searchPar
 type BroadcastEvent =
   | { type: "action", action: BroadcastAction }
   | { type: "joined" }
+  | { type: "spellSelected", spell: Spell }
   | { type: "game", game: Game, ally: Side, foe: Side, hexes: Hex[], hexesOfDead: typeof hexesOfDead }
 
 let receivedGame = false
@@ -4434,6 +4455,8 @@ function start() {
         hexes = data.hexes
         hexesOfDead = data.hexesOfDead
         return
+      case "spellSelected":
+        return spellSelected(data.spell)
       default:
         never(type)
     }
@@ -4492,7 +4515,7 @@ function actionFromClick(e: { clientX: number, clientY: number }): BroadcastActi
   if (game.type === "tactic" && clicked.hex.type === "stack" && stackOwner(clicked.hex.stack) === game.side) {
     return {type: "select", stackPosition: position}
   }
-  if (game.type === "spelling") {
+  if (game.type === "gameSpelling") {
     if (hasAntiMagic(stackAtPosition(position))) {
       return
     }
@@ -4524,7 +4547,7 @@ battlefield.addEventListener("mousemove", e => {
     drawCeilHover(undefined)
     return
   }
-  if (game.type === "spelling") {
+  if (game.type === "gameSpelling") {
     const hex = hexAt(hovered)
     if (!hex) {
       return
