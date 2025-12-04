@@ -23,6 +23,7 @@ type RealStack = (BaseStack & {
     | "vampire"
     | "zombie"
     | "dragon"
+    | "airElement"
     | "archer"
     | "dendroid"
     | "pikeman"
@@ -117,6 +118,7 @@ function stackWidth(stack: Stack): number {
     case "devil":
     case "enhancedArcher":
     case "ballista":
+    case "airElement":
     case "aidTent":
       return 1
     default:
@@ -133,6 +135,7 @@ const speeds: Record<RealStackType, number> = {
   pikeman: 6,
   archer: 5,
   enhancedArcher: 7,
+  airElement: 8,
   dendroid: 5,
   zombie: 4,
   dragon: 11,
@@ -180,6 +183,7 @@ const stackHealth: Record<RealStackType, number> = {
   ballista: 120,
   gargoyle: 25,
   griffin: 35,
+  airElement: 70,
   vampire: 50,
   zombie: 10,
   dragon: 200,
@@ -292,6 +296,8 @@ function attackOf(args: SingleAttackArgs): number {
         return calculate(50, 50)
       case "devil":
         return calculate(40, 50)
+      case "airElement":
+        return calculate(10, 35)
       case "aidTent":
       case "ballista":
         return 0
@@ -300,6 +306,7 @@ function attackOf(args: SingleAttackArgs): number {
       }
     }
   }
+  // fire attack
   switch (stackType) {
     case "archer":
       return calculate(6, 9)
@@ -315,6 +322,7 @@ function attackOf(args: SingleAttackArgs): number {
     case "zombie":
     case "dragon":
     case "angel":
+    case "airElement":
     case "devil":
     case "aidTent":
       return 0
@@ -406,6 +414,7 @@ const defences: Record<RealStackType, number> = {
   griffin: 5,
   vampire: 5,
   zombie: 3,
+  airElement: 7,
   dragon: 8,
   archer: 4,
   enhancedArcher: 6,
@@ -998,6 +1007,7 @@ function applyMagicEffect(args: MagicEffect): Action {
     }
     return Math.ceil(spell + spell * skill.level / 3)
   }
+
   const duration = spellDuration(spell)
 
   switch (spelling) {
@@ -1266,6 +1276,7 @@ function makeAlly(): Side {
   }
 
 }
+
 function makeFoe(): Side {
   return {
     hero: {
@@ -1285,6 +1296,7 @@ function makeFoe(): Side {
   }
 
 }
+
 // endregion
 
 // region grid
@@ -1447,29 +1459,21 @@ function unitKind(stack: Stack): "undead" | "alive" | "stone" | "machine" {
   const type = stack.type
   switch (type) {
     case "ballista":
-      return "machine"
     case "aidTent":
       return "machine"
     case "zombie":
-      return "undead"
     case "vampire":
       return "undead"
-    case "griffin":
-      return "alive"
-    case "pikeman":
-      return "alive"
-    case "archer":
-      return "alive"
-    case "enhancedArcher":
-      return "alive"
     case "gargoyle":
       return "stone"
+    case "griffin":
+    case "pikeman":
+    case "archer":
+    case "enhancedArcher":
     case "dragon":
-      return "alive"
     case "dendroid":
-      return "alive"
     case "angel":
-      return "alive"
+    case "airElement":
     case "devil":
       return "alive"
     case "clone":
@@ -1876,6 +1880,7 @@ function canFireTwice(stack: Stack): boolean {
     case "angel":
     case "devil":
     case "aidTent":
+    case "airElement":
       return false
     case "clone":
       return canFireTwice(stack.copy)
@@ -1904,6 +1909,7 @@ function canFire(stack: Stack): boolean {
     case "angel":
     case "devil":
     case "aidTent":
+    case "airElement":
       return false
     case "clone":
       return canFire(stack.copy)
@@ -2244,7 +2250,7 @@ async function processActions(actions: Action[]): Promise<void> {
   }
 }
 
-function selectedType() {
+function selectedType(): Stack["type"] {
   return selected().type
 }
 
@@ -4284,7 +4290,7 @@ function openBook() {
   })
 }
 
-function selected() {
+function selected(): Stack {
   return game.selected
 }
 
@@ -4397,6 +4403,7 @@ type BroadcastEvent =
 let receivedGame = false
 
 const actions: Action[] = []
+
 async function doBroadcastAction(action: Action, force = false) {
   actions.push(action)
   if (actions.length > 1 && !force) {
