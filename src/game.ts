@@ -46,6 +46,7 @@ type RealStackType = RealStack["type"]
 type StackType = Stack["type"]
 
 type Effect =
+  | { type: "berserk" }
   | { type: "freeze", causer: Stack }
   | { type: "aging", duration: number }
   | { type: "hypnotize", duration: number }
@@ -87,7 +88,7 @@ function makeAidTent(count = 1): AidTent {
   }
 }
 
-function stackOf(type: RealStackType, count = 1): Stack {
+function stackOf(type: RealStackType, count = 1): RealStack {
   if (type === "aidTent") {
     return makeAidTent(count)
   }
@@ -145,8 +146,8 @@ const speeds: Record<RealStackType, number> = {
   fireElement: 7,
   waterElement: 7,
   earthElement: 5,
-  dendroid: 5,
-  zombie: 4,
+  dendroid: 10,
+  zombie: 2,
   dragon: 11,
   devil: 10,
   angel: 12,
@@ -299,7 +300,7 @@ function attackOf(args: SingleAttackArgs): number {
       case "enhancedArcher":
         return calculate(4, 7)
       case "dendroid":
-        return calculate(15, 25)
+        return calculate(5, 10)
       case "zombie":
         return calculate(3, 6)
       case "dragon":
@@ -360,6 +361,7 @@ type MagicEffectSpell =
   | "bless"
   | "rage"
   | "clone"
+  | "berserk"
   | "airShield"
   | "hypnotize"
   | "antiMagic"
@@ -377,6 +379,7 @@ const spellSchool: Record<Spell, MagicSchool> = {
   forgetfulness: "water",
   antiMagic: "earth",
   teleport: "water",
+  berserk: "fire",
   summonAirElement: "air",
   summonFireElement: "air",
   summonEarthElement: "earth",
@@ -540,7 +543,7 @@ function nextRound() {
 }
 
 function nextInQueue() {
-  const stack = gameQueue()[0]
+  const stack = gameQueue([...game.moved, selected()])[0]
   if (!stack) {
     throw new Error("Can't find next")
   }
@@ -558,12 +561,12 @@ function armyHas(army: Stack[]) {
 }
 
 function nextTurn() {
-  if (!armyHas(ally().army)) {
-    return game.state = {type: "end", winner: foe()}
-  }
-  if (!armyHas(foe().army)) {
-    return game.state = {type: "end", winner: ally()}
-  }
+  // if (!armyHas(ally().army)) {
+  //   return game.state = {type: "end", winner: foe()}
+  // }
+  // if (!armyHas(foe().army)) {
+  //   return game.state = {type: "end", winner: ally()}
+  // }
   const selected = nextInQueue()
   game.selected = selected
   game.morale = []
@@ -587,18 +590,49 @@ function ensureAdded<T>(array: T[], value: T) {
   }
 }
 
-function onTurnStarted() {
+function lastItem<T>(items: T[]) {
+  return items[items.length - 1];
+}
+
+async function onTurnStarted() {
+  const current = selected();
   if (currentSide().skills.find(i => i.type === "machine")) {
     if (selectedType() === "aidTent" && !firstDamagedFriend()) {
-      ensureAdded(game.moved, selected())
       doAction({type: "nextTurn"})
       return
     }
+  }
+
+  if (effectIn(toRealStack(current), "berserk")) {
+    function removeBerserk() {
+      removeEffect({effects: toRealStack(current).effects, removing: "berserk"});
+    }
+
+    const target = closestStack({from: current, excludes: [current]})
+    if (!target) {
+      return removeBerserk()
+    }
+    const currentPosition = positionOf(current)
+    const fullPath = pathBetween({start: currentPosition, end: positionOf(target)})
+    const movingPath = fullPath.slice(1, -1)
+    if (movingPath.length <= movementOf(current)) {
+      await attackAt({
+        targetPosition: lastItem(fullPath),
+        nextSelectedPosition: lastItem(movingPath) || fullPath[0],
+      })
+      return removeBerserk()
+    }
+    const path = fullPath.slice(0, movementOf(current))
+    await doAction({
+      type: "moveTo",
+      position: lastItem(path),
+    })
+    await doAction(onTurnFinishing())
     return
   }
   switch (selectedType()) {
     case "ballista": {
-      const position = positionOf(stackEnemy(selected()).army[0])
+      const position = positionOf(stackEnemy(current).army[0])
       doAction({
         type: "fireAt",
         hexPosition: position,
@@ -608,7 +642,6 @@ function onTurnStarted() {
     case "aidTent": {
       const target = firstDamagedFriend()
       if (!target) {
-        ensureAdded(game.moved, selected())
         doAction({type: "nextTurn"})
         return
       }
@@ -620,7 +653,7 @@ function onTurnStarted() {
       return
     }
     default: {
-      const position = positionOf(selected())
+      const position = positionOf(current)
       const hex = hexAt(position);
       const stack = stackFromHex(hex)
       if (!stack || !hex) {
@@ -759,7 +792,7 @@ function currentSideName() {
   return sideName(currentSide())
 }
 
-function gameQueue(): Stack[] {
+function gameQueue(moved: Stack[]): Stack[] {
   let elements: QueueElement[]
   switch (game.type) {
     case "gameSpelling":
@@ -779,7 +812,7 @@ function gameQueue(): Stack[] {
   return gameQueueFor({
     elements,
     waited: game.waited,
-    moved: game.moved,
+    moved: moved,
     previousSide: currentSideName()
   })
 }
@@ -836,7 +869,7 @@ function singleAttack(args: SingleAttackArgs): Action[] {
   const attack = fromDiapason(defenderHero.defence + defenceOf(defender) - attackerHero.attack, -9, 9) / 10
   const baseDamage = attackOf(args) * toRealStack(attacker).count
   const result = [applyDamage({damage: Math.round(baseDamage + baseDamage * attack), receiver: defender})]
-  if (result[0]?.type !== "receiverDead" && attacker.type === "dendroid") {
+  if (result[0]?.type !== "receiverDead" && !effectIn(defender, "freeze") && attacker.type === "dendroid") {
     toRealStack(defender).effects.push({type: "freeze", causer: attacker})
     result.push({type: "stopped", receiver: defender})
   }
@@ -1049,6 +1082,11 @@ function applyMagicEffect(args: MagicEffect): Action {
   switch (spelling) {
     case "clone": {
       return {type: "clone", target: args.targets[0]}
+    }
+    case "berserk": {
+      const target = toRealStack(args.targets[0]);
+      target.effects.push({type: "berserk"})
+      return {type: "berserk", target}
     }
     case "forgetfulness":
     case "hypnotize": {
@@ -1290,9 +1328,9 @@ function makeAlly(): Side {
   return {
     hero: {
       name: "Rudolf",
-      defence: 4,
-      attack: 5,
-      lucky: .75,
+      defence: 3,
+      attack: 3,
+      lucky: 0,
       morale: 0,
       spell: 4,
     },
@@ -1303,29 +1341,30 @@ function makeAlly(): Side {
       {type: "air", level: 3},
     ],
     army: [
-      stackOf("archer", 10),
-      stackOf("dragon", 1),
+      stackOf("dendroid", 10),
     ],
     spells: [
-      "teleport",
+      "berserk",
     ],
   }
 
 }
 
 function makeFoe(): Side {
+  const stack = stackOf("dendroid", 11);
   return {
     hero: {
       name: "Henry",
       defence: 3,
-      attack: 6,
+      attack: 3,
       lucky: .25,
       morale: 0,
       spell: 1,
     },
     army: [
-      stackOf("archer", 15),
-      stackOf("dragon", 14),
+      stack,
+      // stackOf("zombie", 15),
+      // stackOf("dragon", 14),
     ],
     skills: [],
     spells: ["arrow", "slow"],
@@ -1344,6 +1383,7 @@ const forceFieldExists = {image: forceFieldImage, width: 61, height: 136, countO
 const forceFieldDisappearance = {image: forceFieldImage, width: 61, height: 136, countOffset: 11, count: 4}
 const forceFieldDuration = 60
 const hastSprite = {image: imageOf("hast"), width: 113, height: 106, count: 15}
+const berserkSprite = {image: imageOf("berserk"), width: 61, height: 99, count: 12}
 const hypnotizeSprite = {image: imageOf("hypnotize"), width: 99, height: 90, count: 19}
 const antiMagicSprite = {image: imageOf("antiMagic"), width: 94, height: 126, count: 16}
 const forgetfulnessSprite = {image: imageOf("forgetfulness"), width: 119, height: 75, count: 15}
@@ -1447,9 +1487,9 @@ for (let i = 0; i <= lastRowIndex; i++) {
 
 // place army
 globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]})
-globalHexes.push({type: "stack", row: 4, column: 1, stack: ally().army[1]})
-globalHexes.push({type: "stack", row: 5, column: 1, stack: foe().army[0]})
-globalHexes.push({type: "stack", row: 5, column: 4, stack: foe().army[1]})
+globalHexes.push({type: "stack", row: 1, column: 2, stack: foe().army[0]})
+// globalHexes.push({type: "stack", row: 1, column: 1, stack: foe().army[0]})
+// globalHexes.push({type: "stack", row: 3, column: 4, stack: foe().army[1]})
 // grid[2][3] = {
 //   "type": "fireWall",
 //   "state": "fires",
@@ -1565,6 +1605,12 @@ interface CloseAttackArgs {
   attacker: CloseAttackMember
 }
 
+interface ClickAtAction {
+  type: "clickAt",
+  targetPosition: Position,
+  nextSelectedPosition: Position
+}
+
 type BaseAction =
   | { type: "closeAttack", targetStack: Stack }
   | { type: "receiveDamage", receiver: Stack, damage: number }
@@ -1586,11 +1632,12 @@ type BaseAction =
 // There should be only simple args. No stack, no hex and e.t.c
 // It's need for actions broadcasting
 type BroadcastAction =
-  | { type: "clickAt", targetPosition: ClickedHex, nextSelectedPosition: Position }
+  | ClickAtAction
   | { type: "select", stackPosition: Position }
   | FireAtAction
   | FireTwiceAtAction
   | SpellSelectedAction
+  | { type: "berserk", target: Stack }
   | { type: "teleport", stackPosition: Position, targetPosition: Position }
   | { type: "moveTo", position: Position }
   | { type: "tryHealAndNextTurn", stackPosition: Position, value: number }
@@ -1667,7 +1714,8 @@ interface StackFireWallHex {
 
 type Hex = ObstacleHex | StackHex | FireWallHex | StackFireWallHex | EmptyHex
 
-const _emptyHexes: {[row_column: string]: EmptyHex} = {}
+const _emptyHexes: { [row_column: string]: EmptyHex } = {}
+
 function emptyHex(row: number, column: number): EmptyHex {
   const key = `${row}_${column}`;
   if (_emptyHexes[key]) {
@@ -2411,7 +2459,6 @@ function stackHexFrom(hex: Hex | undefined): StackHex | undefined {
 function onTurnFinishing(): Action {
   const stack = selected();
   if (game.morale.includes(stack) || !getLucky(levelToProbability(stackOwnerHero(stack).morale))) {
-    ensureAdded(game.moved, stack)
     return {type: "nextTurn"}
   }
   ensureAdded(game.morale, stack)
@@ -2448,6 +2495,19 @@ function summonStack(stack: Stack) {
   globalHexes.push(stackHex(stack, newPosition.row, newPosition.column))
 }
 
+async function attackAt(action: Omit<ClickAtAction, "type">) {
+  const target = action.targetPosition;
+  const targetStack = stackAtPosition(target)
+  if (!targetStack) {
+    return
+  }
+  let next = action.nextSelectedPosition
+  if (stackWidth(selected()) === 2 && target.row === next.row && next.column > target.column) {
+    next = {...next, column: next.column + 1}
+  }
+  await doAction({type: "moveTo", position: next})
+  await doAction({type: "closeAttack", targetStack})
+}
 
 async function doAction(action: Action): Promise<void> {
   increaseSeed(1)
@@ -2495,8 +2555,24 @@ async function doAction(action: Action): Promise<void> {
       if (!target) {
         return
       }
-
-      if (selectedType() === "dendroid" && !samePositions(oldPosition, target)) {
+      const targetStack = stackAtPosition(action.targetPosition)
+      if (targetStack && currentEnemies().includes(targetStack)) {
+        if (!available.find(h => samePositions(h, action.nextSelectedPosition))) {
+          return
+        }
+        await attackAt(action)
+        await doAction(onTurnFinishing())
+        return
+      }
+      await doAction({type: "moveTo", position: action.targetPosition})
+      await doAction(onTurnFinishing())
+      return
+    }
+    case "moveTo": {
+      increaseSeed(action.position.row)
+      increaseSeed(action.position.column)
+      const oldPosition = positionOf(selected())
+      if (selectedType() && !samePositions(oldPosition, action.position)) {
         availableHexPositionsFrom({
           ...oldPosition,
           radius: 1,
@@ -2515,29 +2591,7 @@ async function doAction(action: Action): Promise<void> {
           removeFromArray(toRealStack(stack).effects, effect)
         })
       }
-      const targetStack = stackAtPosition(action.targetPosition)
-      if (targetStack && currentEnemies().includes(targetStack)) {
-        if (!available.find(h => samePositions(h, action.nextSelectedPosition))) {
-          return
-        }
-        const target = action.targetPosition;
-        let next = action.nextSelectedPosition
-        if (stackWidth(selected()) === 2 && target.row === next.row && next.column > target.column) {
-          next = {...next, column: next.column + 1}
-        }
-        await doAction({type: "moveTo", position: next})
-        await doAction({type: "closeAttack", targetStack})
-        await doAction(onTurnFinishing())
-        return
-      }
-      await doAction({type: "moveTo", position: action.targetPosition})
-      await doAction(onTurnFinishing())
-      return
-    }
-    case "moveTo": {
-      increaseSeed(action.position.row)
-      increaseSeed(action.position.column)
-      return await moveSelectedStack(action, {row: action.position.row, column: action.position.column})
+      return await moveSelectedStack(action, action.position)
     }
     case "hitBack": {
       const args = action.args
@@ -2565,7 +2619,6 @@ async function doAction(action: Action): Promise<void> {
       if (first?.type !== "receiverDead" && shouldGetHitBack(attacker) && canHitBack(defender)) {
         result.push({type: "hitBack", args})
       }
-      result.push(onTurnFinishing())
       await processActions(result)
       return
     }
@@ -2617,6 +2670,7 @@ async function doAction(action: Action): Promise<void> {
       return
     }
     case "nextTurn": {
+      ensureAdded(game.moved, selected())
       nextTurn()
       return
     }
@@ -2632,15 +2686,16 @@ async function doAction(action: Action): Promise<void> {
       }
       stackHex.freezing = {action, diff: 0, startMs: Date.now(), total: 0}
       const args = {hex, ...position}
-      const animate = () => {
-        if (!stackHex.freezing) {
-          return
+      return new Promise(res => {
+        const animate = () => {
+          if (!stackHex.freezing) {
+            return
+          }
+          animateFreeze(args, res)
+          requestAnimationFrame(animate)
         }
-        animateFreeze(args)
-        requestAnimationFrame(animate)
-      }
-      animate()
-      return
+        animate()
+      })
     }
     case "tryHealAndNextTurn": {
       ensureAdded(game.moved, selected())
@@ -2884,6 +2939,7 @@ async function doAction(action: Action): Promise<void> {
           }))
           break
         }
+        case "berserk":
         case "forgetfulness":
         case "slow": {
           const {target} = enemyStackAt(position)
@@ -3073,6 +3129,7 @@ async function doAction(action: Action): Promise<void> {
           case "antiMagic":
           case "hypnotize":
           case "teleport":
+          case "berserk":
             game = {...game, type: "gameSpelling", spell}
             return
           case "forgetfulness":
@@ -3107,6 +3164,29 @@ async function doAction(action: Action): Promise<void> {
       removeHex(stackPosition.row, stackPosition.column)
       globalHexes.push(stackHex(hex.stack, targetPosition.row, targetPosition.column))
       return
+    }
+    case "berserk": {
+      const sprite = berserkSprite
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const position = positionToPoint(positionOf(action.target))
+
+      return drawAnimation({
+        struct,
+        draw() {
+          animations.drawImage(
+            sprite.image,
+            // xOffset + frame * xOffset + frame * frameWidth,
+            struct.frame * sprite.width,
+            0,
+            sprite.width,
+            sprite.height,
+            position.x,
+            position.y,
+            hexWidth,
+            hexHeight
+          )
+        }
+      })
     }
     default: {
       never(action)
@@ -3161,7 +3241,7 @@ function hexAtPoint(point: Point): HexAtPoint | undefined {
 function drawQueue() {
   clearRect(queueCtx)
 
-  const queue = gameQueue()
+  const queue = gameQueue(game.moved)
   const boxWidth = 60
   const boxHeight = 40
   const padding = 10
@@ -3402,13 +3482,15 @@ function pathBetween({start, end}: PathBetweenArgs): Position[] {
       .filter(
         n => {
           const type = hexAt(n)?.type
-          return n.row >= 0 &&
+          return (
+            n.row >= 0 &&
             n.row <= lastRowIndex &&
             n.column >= 0 &&
             n.column <= lastColumnIndex && (
               type === "empty" ||
               type === "fireWall"
-            )
+            ) || samePositions(n, end)
+          )
         }
       )
 
@@ -3459,13 +3541,14 @@ function forceMove(hex: Hex) {
 const freezingTime = 1000
 const lineCount = 5
 
-function animateFreeze({hex, row, column}: Position & { hex: Hex }) {
+function animateFreeze({hex, row, column}: Position & { hex: Hex }, onFinished: () => void) {
   const stackHex = stackHexFrom(hex)
   if (!stackHex) {
     return
   }
   const freeze = stackHex.freezing
   if (!freeze) {
+    onFinished()
     return inAnimation = false
   }
   inAnimation = true
@@ -3473,6 +3556,7 @@ function animateFreeze({hex, row, column}: Position & { hex: Hex }) {
     clearRect(animations)
     stackHex.freezing = undefined
     inAnimation = false
+    onFinished()
     return
   }
   const diff = Date.now() - freeze.total - freeze.startMs
@@ -4254,6 +4338,7 @@ function drawBattlefield(timestamp: number) {
       case "arrow":
       case "slow":
       case "forgetfulness":
+      case "berserk":
         drawAvailableHexes(enemyHexes())
         break
       case "hast":
@@ -4264,6 +4349,7 @@ function drawBattlefield(timestamp: number) {
       case "airShield":
       case "teleport":
       case "antiMagic":
+      case "berserk":
         drawAvailableHexes(friendHexes())
         break
       default:
@@ -4682,6 +4768,7 @@ battlefield.addEventListener("mousemove", e => {
         case "arrow":
         case "forgetfulness":
         case "hypnotize":
+        case "berserk":
           if (!isEnemy) {
             return
           }
@@ -4694,6 +4781,7 @@ battlefield.addEventListener("mousemove", e => {
         case "antiMagic":
         case "clone":
         case "teleport":
+        case "berserk":
           if (isEnemy) {
             return
           }
