@@ -476,7 +476,7 @@ function defenceOf(stack: Stack): number {
 // region battle
 
 function attackTypeOf(stack: Stack) {
-  return canFire(stack) ? "fire" : "hand"
+  return hasAbilityToFire(stack) ? "fire" : "hand"
 }
 
 function currentAttackType() {
@@ -594,6 +594,10 @@ function lastItem<T>(items: T[]) {
 }
 
 async function chase(target: Stack): Promise<"attacked" | "chasing"> {
+  if (canFire()) {
+    await doAction(fireActionAt(positionOf(target)))
+    return "attacked"
+  }
   const current = selected()
   const currentPosition = positionOf(current)
   const fullPath = pathBetween({start: currentPosition, end: positionOf(target)})
@@ -1368,7 +1372,7 @@ function makeAlly(): Side {
 }
 
 function makeFoe(): Side {
-  const stack = stackOf("dendroid", 11);
+  const stack = stackOf("archer", 11);
   return {
     type: "computer",
     hero: {
@@ -1983,7 +1987,7 @@ function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): Availab
   return hexes
 }
 
-function canFireTwice(stack: Stack): boolean {
+function hasAbilityToFireTwice(stack: Stack): boolean {
   if (effectIn(stack, "forgetfulness")) {
     return false
   }
@@ -2009,13 +2013,13 @@ function canFireTwice(stack: Stack): boolean {
     case "waterElement":
       return false
     case "clone":
-      return canFireTwice(stack.copy)
+      return hasAbilityToFireTwice(stack.copy)
     default:
       never(type)
   }
 }
 
-function canFire(stack: Stack): boolean {
+function hasAbilityToFire(stack: Stack): boolean {
   if (effectIn(stack, "forgetfulness")) {
     return false
   }
@@ -2041,10 +2045,14 @@ function canFire(stack: Stack): boolean {
     case "waterElement":
       return false
     case "clone":
-      return canFire(stack.copy)
+      return hasAbilityToFire(stack.copy)
     default:
       never(type)
   }
+}
+
+function canSelectedFire() {
+
 }
 
 function currentEnemies(): Stack[] {
@@ -2106,7 +2114,7 @@ function updateAttackBtn() {
 }
 
 attackTypeBtn.addEventListener("click", () => {
-  if (!canFire(selected())) {
+  if (!hasAbilityToFire(selected())) {
     return
   }
   const type = game.attackType
@@ -4290,6 +4298,10 @@ function drawAvailableHexes(hexes: AvailableHex[]) {
   })
 }
 
+function canFire() {
+  return hasAbilityToFire(selected()) && !hasEnemyAround();
+}
+
 function availableAttackHexes(position: Position) {
   const hexes = availableHexPositionsFrom({
     row: position.row,
@@ -4297,7 +4309,7 @@ function availableAttackHexes(position: Position) {
     radius: movementOf(selected()),
     type: "moveToAttack",
   })
-  if (canFire(selected()) && !hasEnemyAround()) {
+  if (canFire()) {
     hexes.push(...enemyHexes())
   }
   return hexes
@@ -4356,7 +4368,7 @@ function drawBattlefield(timestamp: number) {
   if (game.type === "ended") {
     drawText({
       ctx: endedContext,
-      text: `${sideName(game.winner)} WIN`,
+      text: `${sideName(game.winner)} WINS`,
       x: endedContext.canvas.width / 2,
       y: endedContext.canvas.height / 2,
       font: "50px Arial",
@@ -4406,7 +4418,7 @@ function drawBattlefield(timestamp: number) {
     drawAvailableHexes([])
   }
   if (previousSelected !== selected()) {
-    if (canFire(selected())) {
+    if (hasAbilityToFire(selected())) {
       attackTypeBtn.style.display = ""
       game.attackType = {default: "fire"}
       updateAttackBtn()
@@ -4719,6 +4731,13 @@ function broadcastEvent(event: BroadcastEvent) {
   broadcast.postMessage(message)
 }
 
+function fireActionAt(position: Position): FireAtAction | FireTwiceAtAction {
+  if (hasAbilityToFireTwice(selected())) {
+    return {type: "fireTwiceAt", hexPosition: position}
+  }
+  return {type: "fireAt", hexPosition: position}
+}
+
 function actionFromClick(e: { clientX: number, clientY: number }): BroadcastAction | undefined {
   if (bookOpened() || inAnimation || !currentSidePlaying() || finished()) {
     return
@@ -4749,11 +4768,8 @@ function actionFromClick(e: { clientX: number, clientY: number }): BroadcastActi
   if (selectedType() === "aidTent") {
     return {type: "tryHealAndNextTurn", stackPosition: position, value: 30}
   }
-  if (canFire(selected()) && currentAttackType() === "fire" && !hasEnemyAround() && enemyStackAt(clicked).target) {
-    if (canFireTwice(selected())) {
-      return {type: "fireTwiceAt", hexPosition: position}
-    }
-    return {type: "fireAt", hexPosition: position}
+  if (canFire() && currentAttackType() === "fire" && enemyStackAt(clicked).target) {
+    return fireActionAt(position)
   }
   return {type: "clickAt", targetPosition: clicked, nextSelectedPosition: nextSelectedPosition(clicked)}
 }
