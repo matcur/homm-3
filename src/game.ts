@@ -525,7 +525,6 @@ function nextRound() {
   const selected = nextInQueue()
   game = {
     type: "battle",
-    state: {type: "playing"},
     moved: [],
     defendedAttack: [],
     waited: [],
@@ -561,12 +560,12 @@ function armyHas(army: Stack[]) {
 }
 
 function nextTurn() {
-  // if (!armyHas(ally().army)) {
-  //   return game.state = {type: "end", winner: foe()}
-  // }
-  // if (!armyHas(foe().army)) {
-  //   return game.state = {type: "end", winner: ally()}
-  // }
+  if (!armyHas(ally().army)) {
+    return game = {...game, type: "ended", winner: foe()}
+  }
+  if (!armyHas(foe().army)) {
+    return game = {...game, type: "ended", winner: ally()}
+  }
   const selected = nextInQueue()
   game.selected = selected
   game.morale = []
@@ -594,6 +593,27 @@ function lastItem<T>(items: T[]) {
   return items[items.length - 1];
 }
 
+async function chase(target: Stack): Promise<"attacked" | "chasing"> {
+  const current = selected()
+  const currentPosition = positionOf(current)
+  const fullPath = pathBetween({start: currentPosition, end: positionOf(target)})
+  const movingPath = fullPath.slice(1, -1)
+  if (movingPath.length <= movementOf(current)) {
+    await attackAt({
+      targetPosition: lastItem(fullPath),
+      nextSelectedPosition: lastItem(movingPath) || currentPosition,
+    })
+    return "attacked"
+  }
+  const path = fullPath.slice(0, movementOf(current))
+  await doAction({
+    type: "moveTo",
+    position: lastItem(path),
+  })
+  await doAction(onTurnFinishing())
+  return "chasing"
+}
+
 async function onTurnStarted() {
   const current = selected();
   if (currentSide().skills.find(i => i.type === "machine")) {
@@ -604,31 +624,14 @@ async function onTurnStarted() {
   }
 
   if (effectIn(toRealStack(current), "berserk")) {
-    function removeBerserk() {
-      removeEffect({effects: toRealStack(current).effects, removing: "berserk"});
-    }
-
     const target = closestStack({from: current, excludes: [current]})
     if (!target) {
-      return removeBerserk()
+      return
     }
-    const currentPosition = positionOf(current)
-    const fullPath = pathBetween({start: currentPosition, end: positionOf(target)})
-    const movingPath = fullPath.slice(1, -1)
-    if (movingPath.length <= movementOf(current)) {
-      await attackAt({
-        targetPosition: lastItem(fullPath),
-        nextSelectedPosition: lastItem(movingPath) || fullPath[0],
-      })
-      return removeBerserk()
+    if (await chase(target) === "chasing") {
+      return
     }
-    const path = fullPath.slice(0, movementOf(current))
-    await doAction({
-      type: "moveTo",
-      position: lastItem(path),
-    })
-    await doAction(onTurnFinishing())
-    return
+    return removeEffect({effects: toRealStack(current).effects, removing: "berserk"})
   }
   switch (selectedType()) {
     case "ballista": {
@@ -659,7 +662,16 @@ async function onTurnStarted() {
       if (!stack || !hex) {
         return
       }
-      return stackSteppingOn({hex, stack})
+      await stackSteppingOn({hex, stack})
+      const side = currentSide()
+      if (side.type !== "computer") {
+        return
+      }
+      const closest = closestStack({from: current, excludes: side.army})
+      if (!closest) {
+        return
+      }
+      return chase(closest)
     }
   }
 }
@@ -806,6 +818,9 @@ function gameQueue(moved: Stack[]): Stack[] {
     case "tactic":
       elements = mapArmyToQueue(game.side)
       break
+    case "ended":
+      elements = []
+      break
     default:
       never(game)
   }
@@ -869,7 +884,7 @@ function singleAttack(args: SingleAttackArgs): Action[] {
   const attack = fromDiapason(defenderHero.defence + defenceOf(defender) - attackerHero.attack, -9, 9) / 10
   const baseDamage = attackOf(args) * toRealStack(attacker).count
   const result = [applyDamage({damage: Math.round(baseDamage + baseDamage * attack), receiver: defender})]
-  if (result[0]?.type !== "receiverDead" && !effectIn(defender, "freeze") && attacker.type === "dendroid") {
+  if (result[0]?.type !== "receiverDead" && attacker.type === "dendroid") {
     toRealStack(defender).effects.push({type: "freeze", causer: attacker})
     result.push({type: "stopped", receiver: defender})
   }
@@ -1318,6 +1333,7 @@ interface Hero {
 }
 
 interface Side {
+  type: "player" | "computer"
   hero: Hero
   spells: Spell[]
   skills: Skill[]
@@ -1326,6 +1342,7 @@ interface Side {
 
 function makeAlly(): Side {
   return {
+    type: "player",
     hero: {
       name: "Rudolf",
       defence: 3,
@@ -1341,7 +1358,7 @@ function makeAlly(): Side {
       {type: "air", level: 3},
     ],
     army: [
-      stackOf("dendroid", 10),
+      stackOf("dendroid", 12),
     ],
     spells: [
       "berserk",
@@ -1353,6 +1370,7 @@ function makeAlly(): Side {
 function makeFoe(): Side {
   const stack = stackOf("dendroid", 11);
   return {
+    type: "computer",
     hero: {
       name: "Henry",
       defence: 3,
@@ -1430,8 +1448,12 @@ endTacticBtn.addEventListener("click", () => {
 const nextStackBtn = querySelector("button.next-stack")
 nextStackBtn.addEventListener("click", nextTurn)
 const bookBtn = querySelector<HTMLButtonElement>("button.book-btn")
+const stopBtn = querySelector<HTMLButtonElement>("button.stop-btn")
 bookBtn.addEventListener("click", () => {
   openBook()
+})
+stopBtn.addEventListener("click", () => {
+  stopped = !stopped
 })
 const availableHover = querySelector<HTMLCanvasElement>("canvas.available-hover").getContext("2d")!
 const endedContext = querySelector<HTMLCanvasElement>("canvas.ended").getContext("2d")!
@@ -1487,7 +1509,7 @@ for (let i = 0; i <= lastRowIndex; i++) {
 
 // place army
 globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]})
-globalHexes.push({type: "stack", row: 1, column: 2, stack: foe().army[0]})
+globalHexes.push({type: "stack", row: 1, column: 12, stack: foe().army[0]})
 // globalHexes.push({type: "stack", row: 1, column: 1, stack: foe().army[0]})
 // globalHexes.push({type: "stack", row: 3, column: 4, stack: foe().army[1]})
 // grid[2][3] = {
@@ -1599,6 +1621,12 @@ interface SpellSelectedAction {
   spell: Spell
 }
 
+interface SpellingAction {
+  type: "spelling",
+  spell: RequiredPositionSpell,
+  position: Position
+}
+
 interface CloseAttackArgs {
   type: AttackType
   defender: CloseAttackMember
@@ -1611,6 +1639,7 @@ interface ClickAtAction {
   nextSelectedPosition: Position
 }
 
+// do I really need some many actions? Maybe leave only a few?
 type BaseAction =
   | { type: "closeAttack", targetStack: Stack }
   | { type: "receiveDamage", receiver: Stack, damage: number }
@@ -1643,7 +1672,7 @@ type BroadcastAction =
   | { type: "tryHealAndNextTurn", stackPosition: Position, value: number }
   | { type: "nextTurn" }
   | { type: "empty" }
-  | { type: "spelling", spell: RequiredPositionSpell, position: Position }
+  | SpellingAction
   | { type: "resistance", stackPoint: Point }
   | { type: "cloneAttacked", stack: Cloned }
 
@@ -2507,6 +2536,157 @@ async function attackAt(action: Omit<ClickAtAction, "type">) {
   }
   await doAction({type: "moveTo", position: next})
   await doAction({type: "closeAttack", targetStack})
+  await doAction(onTurnFinishing())
+}
+
+async function doSpelling(action: SpellingAction) {
+  const {spell, position} = action
+  const stack = stackAtPosition(position)
+  if (hasAntiMagic(stack)) {
+    return
+  }
+  switch (spell) {
+    case "frostRing":
+      await doAction({type: "frostRing", point: {...position, ...positionToPoint(position)}})
+      break
+    case "lightning":
+    case "arrow": {
+      const {enemy, target} = enemyStackAt(position)
+      if (!target) {
+        return
+      }
+      await processActions(magicAttack({
+        receiver: enemy,
+        attacker: currentSide(),
+        target,
+        spell,
+      }))
+      break
+    }
+    case "berserk":
+    case "forgetfulness":
+    case "slow": {
+      const {target} = enemyStackAt(position)
+      if (!target) {
+        return
+      }
+      await processActions([applyMagicEffect({
+        targets: [target],
+        spell,
+        caster: currentSide(),
+      })])
+      break
+    }
+    case "teleport": {
+      const {target} = friendStackAt(position)
+      if (!target) {
+        return
+      }
+      game = {...game, type: "stackTeleporting", stackPosition: position}
+      return
+    }
+    case "hast":
+    case "bless":
+    case "rage":
+    case "clone":
+    case "antiMagic":
+    case "airShield": {
+      const {target} = friendStackAt(position)
+      if (!target) {
+        return
+      }
+      await processActions([applyMagicEffect({
+        targets: [target],
+        spell,
+        caster: currentSide(),
+      })])
+      break
+    }
+    case "fireWall":
+      if (hexAt(position)?.type !== "empty") {
+        return
+      }
+      globalHexes.push(fireWallHex(position))
+      break
+    case "forceField":
+      if (hexAt(position)?.type !== "empty") {
+        return
+      }
+      globalHexes.push({
+        ...position,
+        type: "obstacle",
+        kind: {
+          type: "forceField",
+          state: "appearing",
+          animation: {duration: forceFieldDuration, frameCount: forceFieldAppearance.count, frame: 0},
+        },
+      })
+      break
+    case "hypnotize":
+      const stack = enemyStackAt(action.position)?.target;
+      if (!stack || stack.type === "clone") {
+        return
+      }
+      await doAction(applyMagicEffect({targets: [stack], spell: "hypnotize", caster: currentSide()}))
+      break
+    default:
+      never(spell)
+  }
+  drawCeilHover(undefined)
+  game = {...game, type: "battle"}
+  ensureAdded(game.heroesCastedSpell, stackOwnerHero(selected()))
+  return
+}
+
+function doSpellSelectedAction(action: SpellSelectedAction) {
+  const {spell} = action
+  switch (spell) {
+    case "summonAirElement":
+      return summonStack(stackOf("airElement", 10))
+    case "summonFireElement":
+      return summonStack(stackOf("fireElement", 10))
+    case "summonEarthElement":
+      return summonStack(stackOf("earthElement", 12))
+    case "summonWaterElement":
+      return summonStack(stackOf("waterElement", 11))
+  }
+  if (spellLevel(spell) === 3) {
+    switch (spell) {
+      // allow user to peek a spell hex
+      case "lightning":
+      case "arrow":
+      case "frostRing":
+      case "clone":
+      case "fireWall":
+      case "forceField":
+      case "antiMagic":
+      case "hypnotize":
+      case "teleport":
+      case "berserk":
+        game = {...game, type: "gameSpelling", spell}
+        return
+      case "forgetfulness":
+      case "slow": {
+        const caster = currentSide()
+        ensureAdded(game.heroesCastedSpell, caster.hero)
+        applyMagicEffect({caster, spell, targets: stackEnemy(selected()).army})
+        return
+      }
+      case "hast":
+      case "bless":
+      case "rage":
+      case "airShield": {
+        const caster = currentSide()
+        ensureAdded(game.heroesCastedSpell, caster.hero)
+        applyMagicEffect({caster, spell, targets: caster.army})
+        return
+      }
+      default:
+        never(spell)
+    }
+  }
+  game = {...game, type: "gameSpelling", spell}
+  return
 }
 
 async function doAction(action: Action): Promise<void> {
@@ -2557,11 +2737,7 @@ async function doAction(action: Action): Promise<void> {
       }
       const targetStack = stackAtPosition(action.targetPosition)
       if (targetStack && currentEnemies().includes(targetStack)) {
-        if (!available.find(h => samePositions(h, action.nextSelectedPosition))) {
-          return
-        }
         await attackAt(action)
-        await doAction(onTurnFinishing())
         return
       }
       await doAction({type: "moveTo", position: action.targetPosition})
@@ -2680,12 +2856,12 @@ async function doAction(action: Action): Promise<void> {
         return
       }
       const hex = hexAt(position)
-      const stackHex = stackHexFrom(hex)
-      if (!stackHex || !hex) {
+      if (!hex || hex.type !== "stack") {
         return
       }
+      const stackHex = hex
       stackHex.freezing = {action, diff: 0, startMs: Date.now(), total: 0}
-      const args = {hex, ...position}
+      const args = {hex, row: position.row, column: position.column}
       return new Promise(res => {
         const animate = () => {
           if (!stackHex.freezing) {
@@ -2916,102 +3092,7 @@ async function doAction(action: Action): Promise<void> {
       })
     }
     case "spelling": {
-      const {spell, position} = action
-      const stack = stackAtPosition(position)
-      if (hasAntiMagic(stack)) {
-        return
-      }
-      switch (spell) {
-        case "frostRing":
-          await doAction({type: "frostRing", point: {...position, ...positionToPoint(position)}})
-          break
-        case "lightning":
-        case "arrow": {
-          const {enemy, target} = enemyStackAt(position)
-          if (!target) {
-            return
-          }
-          await processActions(magicAttack({
-            receiver: enemy,
-            attacker: currentSide(),
-            target,
-            spell,
-          }))
-          break
-        }
-        case "berserk":
-        case "forgetfulness":
-        case "slow": {
-          const {target} = enemyStackAt(position)
-          if (!target) {
-            return
-          }
-          await processActions([applyMagicEffect({
-            targets: [target],
-            spell,
-            caster: currentSide(),
-          })])
-          break
-        }
-        case "teleport": {
-          const {target} = friendStackAt(position)
-          if (!target) {
-            return
-          }
-          game = {...game, type: "stackTeleporting", stackPosition: position}
-          return
-        }
-        case "hast":
-        case "bless":
-        case "rage":
-        case "clone":
-        case "antiMagic":
-        case "airShield": {
-          const {target} = friendStackAt(position)
-          if (!target) {
-            return
-          }
-          await processActions([applyMagicEffect({
-            targets: [target],
-            spell,
-            caster: currentSide(),
-          })])
-          break
-        }
-        case "fireWall":
-          if (hexAt(position)?.type !== "empty") {
-            return
-          }
-          globalHexes.push(fireWallHex(position))
-          break
-        case "forceField":
-          if (hexAt(position)?.type !== "empty") {
-            return
-          }
-          globalHexes.push({
-            ...position,
-            type: "obstacle",
-            kind: {
-              type: "forceField",
-              state: "appearing",
-              animation: {duration: forceFieldDuration, frameCount: forceFieldAppearance.count, frame: 0},
-            },
-          })
-          break
-        case "hypnotize":
-          const stack = enemyStackAt(action.position)?.target;
-          if (!stack || stack.type === "clone") {
-            return
-          }
-          await doAction(applyMagicEffect({targets: [stack], spell: "hypnotize", caster: currentSide()}))
-          break
-        default:
-          never(spell)
-      }
-      drawCeilHover(undefined)
-      game = {...game, type: "battle"}
-      ensureAdded(game.heroesCastedSpell, stackOwnerHero(selected()))
-      break
+      return await doSpelling(action);
     }
     case "select": {
       const stack = stackAtPosition(action.stackPosition)
@@ -3106,54 +3187,7 @@ async function doAction(action: Action): Promise<void> {
       })
     }
     case "spellSelected": {
-      const {spell} = action
-      switch (spell) {
-        case "summonAirElement":
-          return summonStack(stackOf("airElement", 10))
-        case "summonFireElement":
-          return summonStack(stackOf("fireElement", 10))
-        case "summonEarthElement":
-          return summonStack(stackOf("earthElement", 12))
-        case "summonWaterElement":
-          return summonStack(stackOf("waterElement", 11))
-      }
-      if (spellLevel(spell) === 3) {
-        switch (spell) {
-          // allow user to peek a spell hex
-          case "lightning":
-          case "arrow":
-          case "frostRing":
-          case "clone":
-          case "fireWall":
-          case "forceField":
-          case "antiMagic":
-          case "hypnotize":
-          case "teleport":
-          case "berserk":
-            game = {...game, type: "gameSpelling", spell}
-            return
-          case "forgetfulness":
-          case "slow": {
-            const caster = currentSide()
-            ensureAdded(game.heroesCastedSpell, caster.hero)
-            applyMagicEffect({caster, spell, targets: stackEnemy(selected()).army})
-            return
-          }
-          case "hast":
-          case "bless":
-          case "rage":
-          case "airShield": {
-            const caster = currentSide()
-            ensureAdded(game.heroesCastedSpell, caster.hero)
-            applyMagicEffect({caster, spell, targets: caster.army})
-            return
-          }
-          default:
-            never(spell)
-        }
-      }
-      game = {...game, type: "gameSpelling", spell}
-      return
+      return doSpellSelectedAction(action);
     }
     case "teleport": {
       const {targetPosition, stackPosition} = action
@@ -3544,7 +3578,7 @@ const lineCount = 5
 function animateFreeze({hex, row, column}: Position & { hex: Hex }, onFinished: () => void) {
   const stackHex = stackHexFrom(hex)
   if (!stackHex) {
-    return
+    return onFinished();
   }
   const freeze = stackHex.freezing
   if (!freeze) {
@@ -4319,10 +4353,10 @@ const foeAidTentPosition: Point = {
 
 function drawBattlefield(timestamp: number) {
   const position = positionOf(selected())
-  if (game.state.type === "end") {
+  if (game.type === "ended") {
     drawText({
       ctx: endedContext,
-      text: `${sideName(game.state.winner)} WIN`,
+      text: `${sideName(game.winner)} WIN`,
       x: endedContext.canvas.width / 2,
       y: endedContext.canvas.height / 2,
       font: "50px Arial",
@@ -4349,7 +4383,6 @@ function drawBattlefield(timestamp: number) {
       case "airShield":
       case "teleport":
       case "antiMagic":
-      case "berserk":
         drawAvailableHexes(friendHexes())
         break
       default:
@@ -4511,12 +4544,12 @@ type BaseGame =
   | { type: "gameSpelling", spell: RequiredPositionSpell }
   | { type: "tactic", side: Side, level: number }
   | { type: "stackTeleporting", stackPosition: Position }
+  | { type: "ended", winner: Side }
 
 type Game = BaseGame & {
   seed: number
   ally: Side
   foe: Side
-  state: { type: "end", winner: Side } | { type: "playing" }
   selected: Stack
   moved: Stack[]
   defendedAttack: Stack[]
@@ -4542,7 +4575,6 @@ function initializedGame(): Game {
   return {
     type: "battle",
     selected,
-    state: {type: "playing"},
     seed: defaultSeed,
     moved: [],
     defendedAttack: [],
@@ -4566,7 +4598,11 @@ let currentFrame = 0
 let frameTimer = 0
 const frameDuration = 180
 
+let stopped = false
 function nextTick(timestamp: number) {
+  if (stopped) {
+    return requestAnimationFrame(nextTick)
+  }
   if (!frameTimer) frameTimer = timestamp
 
   const delta = timestamp - frameTimer
@@ -4635,7 +4671,7 @@ function start() {
       case "joined":
         return broadcastEvent({type: "game", game, hexes: globalHexes, hexesOfDead, ally: ally(), foe: foe()})
       case "game":
-        if (receivedGame || data.game.state.type === "end") {
+        if (receivedGame || data.game.type === "ended") {
           return
         }
         receivedGame = true
@@ -4648,8 +4684,8 @@ function start() {
     }
   }
   broadcastEvent({type: "joined"})
-  onTurnStarted()
   requestAnimationFrame(nextTick)
+  onTurnStarted()
 }
 
 backgroundImage.onload = () => {
@@ -4666,7 +4702,7 @@ backgroundImage.onload = () => {
 // endregion
 
 function finished() {
-  return game.state.type === "end"
+  return game.type === "ended"
 }
 
 battlefield.addEventListener("click", e => {
@@ -4768,7 +4804,6 @@ battlefield.addEventListener("mousemove", e => {
         case "arrow":
         case "forgetfulness":
         case "hypnotize":
-        case "berserk":
           if (!isEnemy) {
             return
           }
@@ -4798,6 +4833,7 @@ battlefield.addEventListener("mousemove", e => {
       return
     case "battle":
     case "tactic":
+    case "ended":
       break;
     default:
       never(type)
