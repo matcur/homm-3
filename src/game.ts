@@ -1362,7 +1362,10 @@ function makeAlly(): Side {
       {type: "air", level: 3},
     ],
     army: [
-      stackOf("dendroid", 12),
+      stackOf("dendroid", 4),
+      stackOf("dendroid", 5),
+      stackOf("archer", 6),
+      stackOf("dragon", 6),
     ],
     spells: [
       "berserk",
@@ -1385,8 +1388,9 @@ function makeFoe(): Side {
     },
     army: [
       stack,
-      // stackOf("zombie", 15),
-      // stackOf("dragon", 14),
+      stackOf("dendroid", 2),
+      stackOf("archer", 2),
+      stackOf("dragon", 4),
     ],
     skills: [],
     spells: ["arrow", "slow"],
@@ -1512,21 +1516,14 @@ for (let i = 0; i <= lastRowIndex; i++) {
 }
 
 // place army
-globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]})
-globalHexes.push({type: "stack", row: 1, column: 12, stack: foe().army[0]})
-// globalHexes.push({type: "stack", row: 1, column: 1, stack: foe().army[0]})
-// globalHexes.push({type: "stack", row: 3, column: 4, stack: foe().army[1]})
-// grid[2][3] = {
-//   "type": "fireWall",
-//   "state": "fires",
-//   "animation": {
-//     "duration": 60,
-//     "frameCount": 6,
-//     "frame": 0,
-//     "timer": 0,
-//     "runout": false
-//   }
-// }
+globalHexes.push({ type: "stack", row: 0, column: 0, stack: ally().army[0] });
+globalHexes.push({ type: "stack", row: 2, column: 0, stack: ally().army[1] });
+globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
+globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
+globalHexes.push({ type: "stack", row: 0, column: lastColumnIndex, stack: foe().army[0] });
+globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
+globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
+globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
 
 
 // endregion
@@ -2699,6 +2696,11 @@ function doSpellSelectedAction(action: SpellSelectedAction) {
 
 async function doAction(action: Action): Promise<void> {
   increaseSeed(1)
+  await internalDoAction(action)
+  updateUi()
+}
+
+async function internalDoAction(action: Action): Promise<void> {
   switch (action.type) {
     case "fireTwiceAt":
     case "fireAt": {
@@ -2722,9 +2724,7 @@ async function doAction(action: Action): Promise<void> {
           } else {
             attackActions.push({type: "fireAt", hexPosition: action.hexPosition})
           }
-          for (const act of attackActions) {
-            await doAction(act)
-          }
+          await processActions(attackActions)
           resolve()
         })
       })
@@ -3283,7 +3283,7 @@ function hexAtPoint(point: Point): HexAtPoint | undefined {
 function drawQueue() {
   clearRect(queueCtx)
 
-  const queue = gameQueue(game.moved)
+  const queue = ui.queue
   const boxWidth = 60
   const boxHeight = 40
   const padding = 10
@@ -4363,29 +4363,41 @@ const foeAidTentPosition: Point = {
   y: rowY(aidTentRow),
 } as const
 
-function drawBattlefield(timestamp: number) {
+const ui = {
+  availableHexes: <AvailableHex[]>[],
+  needDrawQueue: false,
+  allyBallista: <undefined | Ballista>undefined,
+  foeBallista: <undefined | Ballista>undefined,
+  allyAidTent: <undefined | AidTent>undefined,
+  foeAidTent: <undefined | AidTent>undefined,
+  queue: <Stack[]>[],
+}
+function updateUi() {
   const position = positionOf(selected())
-  if (game.type === "ended") {
-    drawText({
-      ctx: endedContext,
-      text: `${sideName(game.winner)} WINS`,
-      x: endedContext.canvas.width / 2,
-      y: endedContext.canvas.height / 2,
-      font: "50px Arial",
-    })
+  ui.allyBallista = ally().army.find(i => i.type === "ballista")
+  ui.foeBallista = foe().army.find(i => i.type === "ballista")
+  ui.allyAidTent = ally().army.find(i => i.type === "aidTent")
+  ui.foeAidTent = foe().army.find(i => i.type === "aidTent")
+  if (inAnimation) {
+    ui.availableHexes = []
+    ui.needDrawQueue = true
+    ui.queue = gameQueue(game.moved)
+    return
   }
   if (game.type === "gameSpelling") {
     const spell = game.spell
     switch (spell) {
       case "fireWall":
       case "forceField":
+        ui.availableHexes = emptyHexes()
+        break
       case "frostRing":
       case "lightning":
       case "arrow":
       case "slow":
       case "forgetfulness":
       case "berserk":
-        drawAvailableHexes(enemyHexes())
+        ui.availableHexes = enemyHexes()
         break
       case "hast":
       case "bless":
@@ -4395,28 +4407,55 @@ function drawBattlefield(timestamp: number) {
       case "airShield":
       case "teleport":
       case "antiMagic":
-        drawAvailableHexes(friendHexes())
+        ui.availableHexes = friendHexes()
         break
       default:
         never(spell)
     }
-    drawQueue()
+    ui.needDrawQueue = true
   } else if (game.type === "stackTeleporting") {
-    drawAvailableHexes(emptyHexes())
+    ui.availableHexes = emptyHexes()
   } else if (selectedType() === "ballista") {
-    drawAvailableHexes(enemyHexes())
-    drawQueue()
+    ui.availableHexes = enemyHexes()
+    ui.needDrawQueue = true
   } else if (selectedType() === "aidTent") {
-    drawAvailableHexes(friendHexes())
-    drawQueue()
+    ui.availableHexes = friendHexes()
+    ui.needDrawQueue = true
   } else if (!inAnimation && position && position.row !== -1) {
     if (!game.moved.includes(selected())) {
-      drawAvailableHexes(availableAttackHexes(position))
+      ui.availableHexes = availableAttackHexes(position)
     }
-    drawQueue()
+    ui.needDrawQueue = true
   } else {
-    drawAvailableHexes([])
+    ui.availableHexes = []
+    ui.needDrawQueue = false
   }
+  ui.queue = gameQueue(game.moved)
+}
+
+function drawBattlefield(timestamp: number) {
+  const {
+    availableHexes,
+    needDrawQueue,
+    allyBallista,
+    foeBallista,
+    allyAidTent,
+    foeAidTent,
+  } = ui
+  if (game.type === "ended") {
+    drawText({
+      ctx: endedContext,
+      text: `${sideName(game.winner)} WINS`,
+      x: endedContext.canvas.width / 2,
+      y: endedContext.canvas.height / 2,
+      font: "50px Arial",
+    })
+  }
+  drawAvailableHexes(availableHexes)
+  if (needDrawQueue) {
+    drawQueue()
+  }
+  // get rid of it
   if (previousSelected !== selected()) {
     if (hasAbilityToFire(selected())) {
       attackTypeBtn.style.display = ""
@@ -4428,7 +4467,6 @@ function drawBattlefield(timestamp: number) {
     }
   }
   drawElements(timestamp)
-  const allyBallista = ally().army.find(i => i.type === "ballista")
   if (allyBallista) {
     drawStackInfo({
       ctx: units,
@@ -4438,7 +4476,6 @@ function drawBattlefield(timestamp: number) {
       stack: allyBallista,
     })
   }
-  const foeBallista = foe().army.find(i => i.type === "ballista")
   if (foeBallista) {
     drawStackInfo({
       ctx: units,
@@ -4449,27 +4486,26 @@ function drawBattlefield(timestamp: number) {
       stack: foeBallista,
     })
   }
-  const allyAid = ally().army.find(i => i.type === "aidTent")
-  if (allyAid) {
+  if (allyAidTent) {
     drawStackInfo({
       ctx: units,
       x: allyAidTentPosition.x,
       y: allyAidTentPosition.y,
       fillStyle: "red",
-      stack: allyAid,
+      stack: allyAidTent,
     })
   }
-  const foeAid = foe().army.find(i => i.type === "aidTent")
-  if (foeAid) {
+  if (foeAidTent) {
     drawStackInfo({
       ctx: units,
       x: foeAidTentPosition.x - hexWidth / 2,
       y: foeAidTentPosition.y + hexHeight / 4,
       fillStyle: "red",
-      stack: foeAid,
+      stack: foeAidTent,
       flip: true,
     })
   }
+  // get rid of it
   bookBtn.disabled = currentSidePlaying() && game.heroesCastedSpell.includes(stackOwnerHero(selected()))
   if (game.type === "battle") {
     waitedBtn.disabled = game.waited.includes(selected())
@@ -4696,6 +4732,7 @@ function start() {
     }
   }
   broadcastEvent({type: "joined"})
+  updateUi()
   requestAnimationFrame(nextTick)
   onTurnStarted()
 }
