@@ -1393,6 +1393,7 @@ function makeAlly(): Side {
     ],
     spells: [
       "berserk",
+      "lightning",
     ],
   }
 
@@ -1412,6 +1413,7 @@ function makeFoe(): Side {
     },
     army: [
       stack,
+      stackOf("dendroid", 15),
     ],
     skills: [],
     spells: ["arrow", "slow"],
@@ -1542,7 +1544,7 @@ globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]});
 // globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
 // globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
 globalHexes.push({type: "stack", row: 0, column: lastColumnIndex, stack: foe().army[0]});
-// globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
+globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
 // globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
 // globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
 
@@ -2520,8 +2522,38 @@ function onTurnFinishing(): Action {
   return {type: "morale", stack: stack}
 }
 
-function hasAntiMagic(stack?: Stack): boolean {
-  return Boolean(stack && effectIn(toRealStack(stack), "antiMagic"));
+function canTakeSpell({stack, spell}: {stack: Stack, spell: Spell}): boolean {
+  function can(stack: Stack): boolean {
+    switch (stack.type) {
+      case "airElement":
+        return spellSchool[spell] !== "air"
+      case "fireElement":
+        return spellSchool[spell] !== "fire"
+      case "earthElement":
+        return spellSchool[spell] !== "earth"
+      case "waterElement":
+        return spellSchool[spell] !== "water"
+      case "clone":
+        return can(stack.copy)
+      case "archer":
+      case "gargoyle":
+      case "griffin":
+      case "vampire":
+      case "zombie":
+      case "dragon":
+      case "dendroid":
+      case "pikeman":
+      case "angel":
+      case "devil":
+      case "enhancedArcher":
+      case "ballista":
+      case "aidTent":
+        return true
+      default:
+        never(stack)
+    }
+  }
+  return can(stack) && !effectIn(toRealStack(stack), "antiMagic")
 }
 
 function summonStack(stack: Stack) {
@@ -2568,7 +2600,7 @@ async function attackAt(action: Omit<ClickAtAction, "type">) {
 async function doSpelling(action: SpellingAction) {
   const {spell, position} = action
   const stack = stackAtPosition(position)
-  if (hasAntiMagic(stack)) {
+  if (!stack || !canTakeSpell({stack, spell})) {
     return
   }
   switch (spell) {
@@ -4849,7 +4881,8 @@ function actionFromClick(e: { clientX: number, clientY: number }): BroadcastActi
     return {type: "teleport", stackPosition: game.stackPosition, targetPosition: position}
   }
   if (game.type === "gameSpelling") {
-    if (hasAntiMagic(stackAtPosition(position))) {
+    const stack = stackAtPosition(position);
+    if (!stack || !canTakeSpell({stack, spell: game.spell})) {
       return
     }
     return {type: "spelling", spell: game.spell, position: position}
@@ -4900,7 +4933,7 @@ battlefield.addEventListener("mousemove", e => {
         return
       }
       // const isEnemy = realStackEnemy(selected()).army.includes(stack)
-      if (hasAntiMagic(stack)) {
+      if (!stack || !canTakeSpell({stack, spell})) {
         return
       }
       const isEnemy = realStackEnemy(selected()).army.includes(stack)
