@@ -559,12 +559,39 @@ function armyHas(army: Stack[]) {
   return false
 }
 
+function casualties(): { ally: Casualties, foe: Casualties } {
+  function map(army: Stack[]) {
+    return army.reduce<Casualties>((acc, cur) => {
+      if (cur.type == "clone" || cur.count === cur.initialCount) {
+        return acc
+      }
+      const type = cur.type;
+      if (!acc[type]) {
+        acc[type] = 0
+      }
+      acc[type] += cur.initialCount - cur.count
+      return acc
+    }, <Casualties>{})
+  }
+
+  function deadStacks(owner: Side): Stack[] {
+    return hexesOfDead
+      .filter(i => i.owner === owner && i.stack.type !== "clone")
+      .map(i => i.stack)
+  }
+
+  return {
+    ally: map([...ally().army, ...deadStacks(ally())]),
+    foe: map([...foe().army, ...deadStacks(foe())]),
+  }
+}
+
 function nextTurn() {
   if (!armyHas(ally().army)) {
-    return game = {...game, type: "ended", winner: foe()}
+    return game = {...game, type: "ended", winner: foe(), casualties: casualties()}
   }
   if (!armyHas(foe().army)) {
-    return game = {...game, type: "ended", winner: ally()}
+    return game = {...game, type: "ended", winner: ally(), casualties: casualties()}
   }
   const selected = nextInQueue()
   game.selected = selected
@@ -1362,10 +1389,7 @@ function makeAlly(): Side {
       {type: "air", level: 3},
     ],
     army: [
-      stackOf("dendroid", 4),
-      stackOf("dendroid", 5),
-      stackOf("archer", 6),
-      stackOf("dragon", 6),
+      stackOf("dendroid", 15),
     ],
     spells: [
       "berserk",
@@ -1388,9 +1412,6 @@ function makeFoe(): Side {
     },
     army: [
       stack,
-      stackOf("dendroid", 2),
-      stackOf("archer", 2),
-      stackOf("dragon", 4),
     ],
     skills: [],
     spells: ["arrow", "slow"],
@@ -1502,7 +1523,7 @@ let game: Game = initializedGame();
 })()
 
 let globalHexes: Hex[] = []
-let hexesOfDead: { row: number, column: number, stack: Stack }[] = []
+let hexesOfDead: { owner: Side, row: number, column: number, stack: Stack }[] = []
 const lastRowIndex = 10
 const lastColumnIndex = 14
 
@@ -1516,14 +1537,14 @@ for (let i = 0; i <= lastRowIndex; i++) {
 }
 
 // place army
-globalHexes.push({ type: "stack", row: 0, column: 0, stack: ally().army[0] });
-globalHexes.push({ type: "stack", row: 2, column: 0, stack: ally().army[1] });
-globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
-globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
-globalHexes.push({ type: "stack", row: 0, column: lastColumnIndex, stack: foe().army[0] });
-globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
-globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
-globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
+globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]});
+// globalHexes.push({ type: "stack", row: 2, column: 0, stack: ally().army[1] });
+// globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
+// globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
+globalHexes.push({type: "stack", row: 0, column: lastColumnIndex, stack: foe().army[0]});
+// globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
+// globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
+// globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
 
 
 // endregion
@@ -2843,14 +2864,15 @@ async function internalDoAction(action: Action): Promise<void> {
         return
       }
       const position = positionOf(dead)
-      const army = stackOwner(dead).army
+      const owner = stackOwner(dead);
+      const army = owner.army
       removeFromArray(army, dead)
       const index = globalHexes.findIndex(i => stackFromHex(i) === dead);
       if (index === -1) {
         return
       }
       globalHexes.splice(index, 1)
-      hexesOfDead.push({...position, stack: dead})
+      hexesOfDead.push({...position, stack: dead, owner})
       return
     }
     case "nextTurn": {
@@ -4372,6 +4394,7 @@ const ui = {
   foeAidTent: <undefined | AidTent>undefined,
   queue: <Stack[]>[],
 }
+
 function updateUi() {
   const position = positionOf(selected())
   ui.allyBallista = ally().army.find(i => i.type === "ballista")
@@ -4433,6 +4456,10 @@ function updateUi() {
   ui.queue = gameQueue(game.moved)
 }
 
+function casualtiesText(casualties: Casualties) {
+  return Object.entries(casualties).map(([name, count]) => `${name}: ${count}`).join(", ")
+}
+
 function drawBattlefield(timestamp: number) {
   const {
     availableHexes,
@@ -4443,13 +4470,35 @@ function drawBattlefield(timestamp: number) {
     foeAidTent,
   } = ui
   if (game.type === "ended") {
+    const x = endedContext.canvas.width / 2
+    const y = endedContext.canvas.height / 2
     drawText({
       ctx: endedContext,
       text: `${sideName(game.winner)} WINS`,
-      x: endedContext.canvas.width / 2,
-      y: endedContext.canvas.height / 2,
+      x,
+      y,
       font: "50px Arial",
     })
+    const allyCasualties = casualtiesText(game.casualties.ally);
+    if (allyCasualties) {
+      drawText({
+        ctx: endedContext,
+        text: `Ally: ${allyCasualties}`,
+        x,
+        y: y + 60,
+        font: "20px Arial",
+      })
+    }
+    const foeCasualties = casualtiesText(game.casualties.foe);
+    if (foeCasualties) {
+      drawText({
+        ctx: endedContext,
+        text: `Foe: ${foeCasualties}`,
+        x,
+        y: y + 90,
+        font: "20px Arial",
+      })
+    }
   }
   drawAvailableHexes(availableHexes)
   if (needDrawQueue) {
@@ -4587,12 +4636,14 @@ function selected(): Stack {
 
 // region startGame
 
+type Casualties = Record<Stack["type"], number>
+
 type BaseGame =
   | { type: "battle" }
   | { type: "gameSpelling", spell: RequiredPositionSpell }
   | { type: "tactic", side: Side, level: number }
   | { type: "stackTeleporting", stackPosition: Position }
-  | { type: "ended", winner: Side }
+  | { type: "ended", winner: Side, casualties: { ally: Casualties, foe: Casualties } }
 
 type Game = BaseGame & {
   seed: number
@@ -4647,6 +4698,7 @@ let frameTimer = 0
 const frameDuration = 180
 
 let stopped = false
+
 function nextTick(timestamp: number) {
   if (stopped) {
     return requestAnimationFrame(nextTick)
