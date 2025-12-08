@@ -4,10 +4,18 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report",
+    "test:setup": "pnpm run build"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "http-server": "^14.1.1",
+    "playwright": "^1.57.0",
     "typescript": "^5.5.3"
   },
   "private": true

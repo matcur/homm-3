@@ -1,19 +1,15 @@
 "use strict";
 // region of region
-const durableEffects = [
-    "aging",
-    "rage",
-    "weakness",
-    "lucky",
-    "accuracy",
-    "slow",
-    "hast",
-];
+let __id = 0;
+function newId() {
+    return __id += 1;
+}
 function makeClone(target) {
-    return { type: "clone", copy: JSOG.parse(JSOG.stringify(target)) };
+    return { id: newId(), type: "clone", copy: JSOG.parse(JSOG.stringify(target)) };
 }
 function makeBallista(count = 1) {
     return {
+        id: newId(),
         count,
         type: "ballista",
         arrowsLeft: 20,
@@ -25,6 +21,7 @@ function makeBallista(count = 1) {
 const aidTentHeal = 30;
 function makeAidTent(count = 1) {
     return {
+        id: newId(),
         count,
         type: "aidTent",
         lastHealth: stackHealth.aidTent,
@@ -40,6 +37,7 @@ function stackOf(type, count = 1) {
         return makeBallista(count);
     }
     return {
+        id: newId(),
         count,
         type,
         lastHealth: stackHealth[type],
@@ -65,6 +63,10 @@ function stackWidth(stack) {
         case "devil":
         case "enhancedArcher":
         case "ballista":
+        case "airElement":
+        case "fireElement":
+        case "earthElement":
+        case "waterElement":
         case "aidTent":
             return 1;
         default:
@@ -80,8 +82,12 @@ const speeds = {
     pikeman: 6,
     archer: 5,
     enhancedArcher: 7,
-    dendroid: 5,
-    zombie: 4,
+    airElement: 8,
+    fireElement: 7,
+    waterElement: 7,
+    earthElement: 5,
+    dendroid: 10,
+    zombie: 2,
     dragon: 11,
     devil: 10,
     angel: 12,
@@ -122,6 +128,10 @@ const stackHealth = {
     ballista: 120,
     gargoyle: 25,
     griffin: 35,
+    airElement: 70,
+    fireElement: 75,
+    waterElement: 80,
+    earthElement: 100,
     vampire: 50,
     zombie: 10,
     dragon: 200,
@@ -217,7 +227,7 @@ function attackOf(args) {
             case "enhancedArcher":
                 return calculate(4, 7);
             case "dendroid":
-                return calculate(15, 25);
+                return calculate(5, 10);
             case "zombie":
                 return calculate(3, 6);
             case "dragon":
@@ -226,6 +236,14 @@ function attackOf(args) {
                 return calculate(50, 50);
             case "devil":
                 return calculate(40, 50);
+            case "airElement":
+                return calculate(10, 35);
+            case "fireElement":
+                return calculate(15, 35);
+            case "waterElement":
+                return calculate(20, 25);
+            case "earthElement":
+                return calculate(35, 45);
             case "aidTent":
             case "ballista":
                 return 0;
@@ -234,6 +252,7 @@ function attackOf(args) {
             }
         }
     }
+    // fire attack
     switch (stackType) {
         case "archer":
             return calculate(6, 9);
@@ -249,8 +268,12 @@ function attackOf(args) {
         case "zombie":
         case "dragon":
         case "angel":
+        case "airElement":
         case "devil":
         case "aidTent":
+        case "fireElement":
+        case "waterElement":
+        case "earthElement":
             return 0;
         default:
             never(stackType);
@@ -259,6 +282,12 @@ function attackOf(args) {
 const spellSchool = {
     forgetfulness: "water",
     antiMagic: "earth",
+    teleport: "water",
+    berserk: "fire",
+    summonAirElement: "air",
+    summonFireElement: "air",
+    summonEarthElement: "earth",
+    summonWaterElement: "water",
     hypnotize: "earth",
     forceField: "earth",
     fireWall: "fire",
@@ -318,6 +347,10 @@ const defences = {
     griffin: 5,
     vampire: 5,
     zombie: 3,
+    airElement: 7,
+    fireElement: 6,
+    waterElement: 5,
+    earthElement: 8,
     dragon: 8,
     archer: 4,
     enhancedArcher: 6,
@@ -337,7 +370,7 @@ function defenceOf(stack) {
 // endregion
 // region battle
 function attackTypeOf(stack) {
-    return canFire(stack) ? "fire" : "hand";
+    return hasAbilityToFire(stack) ? "fire" : "hand";
 }
 function currentAttackType() {
     const type = game.attackType;
@@ -351,22 +384,36 @@ function foe() {
 }
 function nextRound() {
     [...ally().army, ...foe().army].forEach(stack => {
-        durableEffects.forEach(effect => {
-            const target = effectIn(stack, effect);
-            if (!target) {
-                return;
-            }
-            target.duration -= 1;
-            if (target.duration <= 0) {
-                stack = toRealStack(stack);
-                stack.effects.splice(stack.effects.indexOf(target), 1);
+        toRealStack(stack).effects.forEach(effect => {
+            const type = effect.type;
+            switch (type) {
+                case "aging":
+                case "rage":
+                case "weakness":
+                case "lucky":
+                case "accuracy":
+                case "slow":
+                case "hypnotize":
+                case "forgetfulness":
+                case "antiMagic":
+                case "bless":
+                case "airShield":
+                case "hast": {
+                    effect.duration -= 1;
+                    if (effect.duration <= 0) {
+                        stack = toRealStack(stack);
+                        stack.effects.splice(stack.effects.indexOf(effect), 1);
+                    }
+                    return;
+                }
+                case "freeze":
+                    return;
             }
         });
     });
     const selected = nextInQueue();
     game = {
         type: "battle",
-        state: { type: "playing" },
         moved: [],
         defendedAttack: [],
         waited: [],
@@ -383,7 +430,7 @@ function nextRound() {
     onTurnStarted();
 }
 function nextInQueue() {
-    const stack = gameQueue()[0];
+    const stack = gameQueue([...game.moved, selected()])[0];
     if (!stack) {
         throw new Error("Can't find next");
     }
@@ -398,12 +445,36 @@ function armyHas(army) {
     }
     return false;
 }
+function casualties() {
+    function map(army) {
+        return army.reduce((acc, cur) => {
+            if (cur.type == "clone" || cur.count === cur.initialCount) {
+                return acc;
+            }
+            const type = cur.type;
+            if (!acc[type]) {
+                acc[type] = 0;
+            }
+            acc[type] += cur.initialCount - cur.count;
+            return acc;
+        }, {});
+    }
+    function deadStacks(owner) {
+        return hexesOfDead
+            .filter(i => i.owner === owner && i.stack.type !== "clone")
+            .map(i => i.stack);
+    }
+    return {
+        ally: map([...ally().army, ...deadStacks(ally())]),
+        foe: map([...foe().army, ...deadStacks(foe())]),
+    };
+}
 function nextTurn() {
     if (!armyHas(ally().army)) {
-        return game.state = { type: "end", winner: foe() };
+        return game = { ...game, type: "ended", winner: foe(), casualties: casualties() };
     }
     if (!armyHas(foe().army)) {
-        return game.state = { type: "end", winner: ally() };
+        return game = { ...game, type: "ended", winner: ally(), casualties: casualties() };
     }
     const selected = nextInQueue();
     game.selected = selected;
@@ -425,18 +496,56 @@ function ensureAdded(array, value) {
         array.push(value);
     }
 }
-function onTurnStarted() {
+function lastItem(items) {
+    return items[items.length - 1];
+}
+async function chase(target) {
+    if (canFire()) {
+        await doAction(fireActionAt(positionOf(target)));
+        return "attacked";
+    }
+    const current = selected();
+    const currentPosition = positionOf(current);
+    const fullPath = pathBetween({ start: currentPosition, end: positionOf(target) });
+    const movingPath = fullPath.slice(1, -1);
+    if (movingPath.length <= movementOf(current)) {
+        await attackAt({
+            targetPosition: lastItem(fullPath),
+            nextSelectedPosition: lastItem(movingPath) || currentPosition,
+        });
+        return "attacked";
+    }
+    const path = fullPath.slice(0, movementOf(current));
+    await processActions([
+        {
+            type: "moveTo",
+            position: lastItem(path),
+        },
+        onTurnFinishing()
+    ]);
+    return "chasing";
+}
+async function onTurnStarted() {
+    const current = selected();
     if (currentSide().skills.find(i => i.type === "machine")) {
         if (selectedType() === "aidTent" && !firstDamagedFriend()) {
-            ensureAdded(game.moved, selected());
             doAction({ type: "nextTurn" });
             return;
         }
-        return;
+    }
+    if (effectIn(toRealStack(current), "berserk")) {
+        const target = closestStack({ from: current, excludes: [current] });
+        if (!target) {
+            return;
+        }
+        if (await chase(target) === "chasing") {
+            return;
+        }
+        return removeEffect({ effects: toRealStack(current).effects, removing: "berserk" });
     }
     switch (selectedType()) {
         case "ballista": {
-            const position = positionOf(stackEnemy(selected()).army[0]);
+            const position = positionOf(stackEnemy(current).army[0]);
             doAction({
                 type: "fireAt",
                 hexPosition: position,
@@ -446,7 +555,6 @@ function onTurnStarted() {
         case "aidTent": {
             const target = firstDamagedFriend();
             if (!target) {
-                ensureAdded(game.moved, selected());
                 doAction({ type: "nextTurn" });
                 return;
             }
@@ -458,13 +566,22 @@ function onTurnStarted() {
             return;
         }
         default: {
-            const position = positionOf(selected());
+            const position = positionOf(current);
             const hex = hexAt(position);
             const stack = stackFromHex(hex);
             if (!stack || !hex) {
                 return;
             }
-            return stackSteppingOn({ hex, stack });
+            await stackSteppingOn({ hex, stack });
+            const side = currentSide();
+            if (side.type !== "computer") {
+                return;
+            }
+            const closest = closestStack({ from: current, excludes: side.army });
+            if (!closest) {
+                return;
+            }
+            return chase(closest);
         }
     }
 }
@@ -575,11 +692,12 @@ function sideName(side) {
 function currentSideName() {
     return sideName(currentSide());
 }
-function gameQueue() {
+function gameQueue(moved) {
     let elements;
     switch (game.type) {
-        case "spelling":
+        case "gameSpelling":
         case "battle":
+        case "stackTeleporting":
             elements = [
                 ...mapArmyToQueue(game.ally),
                 ...mapArmyToQueue(game.foe),
@@ -588,13 +706,16 @@ function gameQueue() {
         case "tactic":
             elements = mapArmyToQueue(game.side);
             break;
+        case "ended":
+            elements = [];
+            break;
         default:
             never(game);
     }
     return gameQueueFor({
         elements,
         waited: game.waited,
-        moved: game.moved,
+        moved: moved,
         previousSide: currentSideName()
     });
 }
@@ -786,6 +907,11 @@ function applyMagicEffect(args) {
     switch (spelling) {
         case "clone": {
             return { type: "clone", target: args.targets[0] };
+        }
+        case "berserk": {
+            const target = toRealStack(args.targets[0]);
+            target.effects.push({ type: "berserk" });
+            return { type: "berserk", target };
         }
         case "forgetfulness":
         case "hypnotize": {
@@ -980,11 +1106,12 @@ function levelToProbability(level) {
 }
 function makeAlly() {
     return {
+        type: "player",
         hero: {
             name: "Rudolf",
-            defence: 4,
-            attack: 5,
-            lucky: .75,
+            defence: 3,
+            attack: 3,
+            lucky: 0,
             morale: 0,
             spell: 4,
         },
@@ -995,27 +1122,29 @@ function makeAlly() {
             { type: "air", level: 3 },
         ],
         army: [
-            stackOf("archer", 10),
-            stackOf("dragon", 1),
+            stackOf("dendroid", 15),
         ],
         spells: [
-            "forgetfulness",
+            "berserk",
+            "lightning",
         ],
     };
 }
 function makeFoe() {
+    const stack = stackOf("archer", 11);
     return {
+        type: "computer",
         hero: {
             name: "Henry",
             defence: 3,
-            attack: 6,
+            attack: 3,
             lucky: .25,
             morale: 0,
             spell: 1,
         },
         army: [
-            stackOf("archer", 15),
-            stackOf("dragon", 14),
+            stack,
+            stackOf("dendroid", 15),
         ],
         skills: [],
         spells: ["arrow", "slow"],
@@ -1029,6 +1158,7 @@ const forceFieldExists = { image: forceFieldImage, width: 61, height: 136, count
 const forceFieldDisappearance = { image: forceFieldImage, width: 61, height: 136, countOffset: 11, count: 4 };
 const forceFieldDuration = 60;
 const hastSprite = { image: imageOf("hast"), width: 113, height: 106, count: 15 };
+const berserkSprite = { image: imageOf("berserk"), width: 61, height: 99, count: 12 };
 const hypnotizeSprite = { image: imageOf("hypnotize"), width: 99, height: 90, count: 19 };
 const antiMagicSprite = { image: imageOf("antiMagic"), width: 94, height: 126, count: 16 };
 const forgetfulnessSprite = { image: imageOf("forgetfulness"), width: 119, height: 75, count: 15 };
@@ -1074,8 +1204,12 @@ endTacticBtn.addEventListener("click", () => {
 const nextStackBtn = querySelector("button.next-stack");
 nextStackBtn.addEventListener("click", nextTurn);
 const bookBtn = querySelector("button.book-btn");
+const stopBtn = querySelector("button.stop-btn");
 bookBtn.addEventListener("click", () => {
     openBook();
+});
+stopBtn.addEventListener("click", () => {
+    stopped = !stopped;
 });
 const availableHover = querySelector("canvas.available-hover").getContext("2d");
 const endedContext = querySelector("canvas.ended").getContext("2d");
@@ -1111,7 +1245,7 @@ let game = initializedGame();
         level: Math.abs(allyLevel - foeLevel),
     };
 })();
-let hexes = [];
+let globalHexes = [];
 let hexesOfDead = [];
 const lastRowIndex = 10;
 const lastColumnIndex = 14;
@@ -1124,21 +1258,14 @@ for (let i = 0; i <= lastRowIndex; i++) {
     }
 }
 // place army
-hexes.push({ type: "stack", row: 0, column: 0, stack: ally().army[0] });
-hexes.push({ type: "stack", row: 4, column: 1, stack: ally().army[1] });
-hexes.push({ type: "stack", row: 5, column: 1, stack: foe().army[0] });
-hexes.push({ type: "stack", row: 5, column: 4, stack: foe().army[1] });
-// grid[2][3] = {
-//   "type": "fireWall",
-//   "state": "fires",
-//   "animation": {
-//     "duration": 60,
-//     "frameCount": 6,
-//     "frame": 0,
-//     "timer": 0,
-//     "runout": false
-//   }
-// }
+globalHexes.push({ type: "stack", row: 0, column: 0, stack: ally().army[0] });
+// globalHexes.push({ type: "stack", row: 2, column: 0, stack: ally().army[1] });
+// globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
+// globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
+globalHexes.push({ type: "stack", row: 0, column: lastColumnIndex, stack: foe().army[0] });
+globalHexes.push({ type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1] });
+// globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
+// globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
 // endregion
 function effectIn(stack, type) {
     if (!stack) {
@@ -1164,39 +1291,40 @@ function unitKind(stack) {
     const type = stack.type;
     switch (type) {
         case "ballista":
-            return "machine";
         case "aidTent":
             return "machine";
         case "zombie":
-            return "undead";
         case "vampire":
             return "undead";
-        case "griffin":
-            return "alive";
-        case "pikeman":
-            return "alive";
-        case "archer":
-            return "alive";
-        case "enhancedArcher":
-            return "alive";
         case "gargoyle":
             return "stone";
+        case "griffin":
+        case "pikeman":
+        case "archer":
+        case "enhancedArcher":
         case "dragon":
-            return "alive";
         case "dendroid":
-            return "alive";
         case "angel":
-            return "alive";
         case "devil":
             return "alive";
+        case "airElement":
+        case "fireElement":
+        case "waterElement":
+        case "earthElement":
+            return "nature";
         case "clone":
             return unitKind(stack.copy);
         default:
             never(type);
     }
 }
+const _emptyHexes = {};
 function emptyHex(row, column) {
-    return { type: "empty", row, column };
+    const key = `${row}_${column}`;
+    if (_emptyHexes[key]) {
+        return _emptyHexes[key];
+    }
+    return _emptyHexes[key] = { type: "empty", row, column };
 }
 function fireWallHex(position) {
     return {
@@ -1210,7 +1338,7 @@ function stackHex(stack, row, column) {
     return { type: "stack", stack, row, column };
 }
 function positionOf(stack) {
-    for (let hex of hexes) {
+    for (let hex of globalHexes) {
         if (stackFromHex(hex) === stack) {
             return hex;
         }
@@ -1376,7 +1504,7 @@ function availableHexPositionsFrom(args) {
     }
     return hexes;
 }
-function canFireTwice(stack) {
+function hasAbilityToFireTwice(stack) {
     if (effectIn(stack, "forgetfulness")) {
         return false;
     }
@@ -1396,14 +1524,18 @@ function canFireTwice(stack) {
         case "angel":
         case "devil":
         case "aidTent":
+        case "airElement":
+        case "fireElement":
+        case "earthElement":
+        case "waterElement":
             return false;
         case "clone":
-            return canFireTwice(stack.copy);
+            return hasAbilityToFireTwice(stack.copy);
         default:
             never(type);
     }
 }
-function canFire(stack) {
+function hasAbilityToFire(stack) {
     if (effectIn(stack, "forgetfulness")) {
         return false;
     }
@@ -1423,12 +1555,18 @@ function canFire(stack) {
         case "angel":
         case "devil":
         case "aidTent":
+        case "airElement":
+        case "fireElement":
+        case "earthElement":
+        case "waterElement":
             return false;
         case "clone":
-            return canFire(stack.copy);
+            return hasAbilityToFire(stack.copy);
         default:
             never(type);
     }
+}
+function canSelectedFire() {
 }
 function currentEnemies() {
     return stackEnemy(selected()).army;
@@ -1463,9 +1601,26 @@ function querySelector(target) {
 }
 let horizontalIndent = 125;
 let verticalIndent = 160;
+//@ts-expect-error
+window.__allImages = [];
+//@ts-expect-error
+window.__imagesLoaded = Promise.resolve(); // will be replaced
 function imageOf(name) {
     const image = new Image();
     image.src = `/img/${name}.png`;
+    //@ts-expect-error
+    if (!window.__allImages) {
+        //@ts-expect-error
+        window.__allImages = [];
+    }
+    //@ts-expect-error
+    window.__allImages.push(image);
+    //@ts-expect-error
+    window.__imagesLoaded = Promise.all(
+    //@ts-expect-error
+    window.__allImages.map(img => img.complete
+        ? Promise.resolve()
+        : new Promise(res => { img.onload = res; })));
     return image;
 }
 function updateAttackBtn() {
@@ -1477,7 +1632,7 @@ function updateAttackBtn() {
     }
 }
 attackTypeBtn.addEventListener("click", () => {
-    if (!canFire(selected())) {
+    if (!hasAbilityToFire(selected())) {
         return;
     }
     const type = game.attackType;
@@ -1612,8 +1767,8 @@ function hexAtRowColumn(row, column) {
     if (row > lastRowIndex || column < 0) {
         return undefined;
     }
-    for (let i = 0; i < hexes.length; i++) {
-        const item = hexes[i];
+    for (let i = 0; i < globalHexes.length; i++) {
+        const item = globalHexes[i];
         const type = item.type;
         switch (type) {
             case "stackFireWall":
@@ -1709,8 +1864,17 @@ function nextSelectedPosition(position) {
 }
 // Action queue removed - using async/await instead
 async function processActions(actions) {
+    const thisEntered = entered;
+    if (!entered) {
+        entered = true;
+        //@ts-expect-error
+        window.__actionExecuted = false;
+    }
     for (const action of actions) {
         await doAction(action);
+    }
+    if (!thisEntered) {
+        window.__actionExecuted = true;
     }
 }
 function selectedType() {
@@ -1799,55 +1963,253 @@ function stackHexFrom(hex) {
 function onTurnFinishing() {
     const stack = selected();
     if (game.morale.includes(stack) || !getLucky(levelToProbability(stackOwnerHero(stack).morale))) {
-        ensureAdded(game.moved, stack);
         return { type: "nextTurn" };
     }
     ensureAdded(game.morale, stack);
     return { type: "morale", stack: stack };
 }
-function hasAntiMagic(stack) {
-    return Boolean(stack && effectIn(toRealStack(stack), "antiMagic"));
+function canTakeSpell({ stack, spell }) {
+    function can(stack) {
+        switch (stack.type) {
+            case "airElement":
+                return spellSchool[spell] !== "air";
+            case "fireElement":
+                return spellSchool[spell] !== "fire";
+            case "earthElement":
+                return spellSchool[spell] !== "earth";
+            case "waterElement":
+                return spellSchool[spell] !== "water";
+            case "clone":
+                return can(stack.copy);
+            case "archer":
+            case "gargoyle":
+            case "griffin":
+            case "vampire":
+            case "zombie":
+            case "dragon":
+            case "dendroid":
+            case "pikeman":
+            case "angel":
+            case "devil":
+            case "enhancedArcher":
+            case "ballista":
+            case "aidTent":
+                return true;
+            default:
+                never(stack);
+        }
+    }
+    return can(stack) && !effectIn(toRealStack(stack), "antiMagic");
 }
-async function doAction(action) {
-    increaseSeed(1);
-    switch (action.type) {
-        case "spellSelected": {
-            const spell = action.spell;
-            if (spellLevel(spell) === 3) {
-                switch (spell) {
-                    case "lightning":
-                    case "arrow":
-                    case "frostRing":
-                    case "clone":
-                    case "fireWall":
-                    case "forceField":
-                    case "antiMagic":
-                    case "hypnotize":
-                        game = { ...game, type: "spelling", spell };
-                        return;
-                    case "forgetfulness":
-                    case "slow": {
-                        const caster = currentSide();
-                        ensureAdded(game.heroesCastedSpell, caster.hero);
-                        applyMagicEffect({ caster, spell, targets: stackEnemy(selected()).army });
-                        return;
-                    }
-                    case "hast":
-                    case "bless":
-                    case "rage":
-                    case "airShield": {
-                        const caster = currentSide();
-                        ensureAdded(game.heroesCastedSpell, caster.hero);
-                        applyMagicEffect({ caster, spell, targets: caster.army });
-                        return;
-                    }
-                    default:
-                        never(spell);
-                }
+function summonStack(stack) {
+    let newPosition = undefined;
+    if (currentSide() === ally()) {
+        for (let i = 0; i <= lastRowIndex; i++) {
+            const candidate = { row: i, column: 0 };
+            if (!stackAtPosition(candidate)) {
+                newPosition = candidate;
+                break;
             }
-            game = { ...game, type: "spelling", spell };
+        }
+    }
+    else {
+        for (let i = 0; i <= lastRowIndex; i++) {
+            const candidate = { row: i, column: lastColumnIndex };
+            if (!stackAtPosition(candidate)) {
+                newPosition = candidate;
+                break;
+            }
+        }
+    }
+    if (!newPosition) {
+        throw new Error("Implement free hex search by columns");
+    }
+    currentSide().army.push(stack);
+    globalHexes.push(stackHex(stack, newPosition.row, newPosition.column));
+}
+async function attackAt(action) {
+    const target = action.targetPosition;
+    const targetStack = stackAtPosition(target);
+    if (!targetStack) {
+        return;
+    }
+    let next = action.nextSelectedPosition;
+    if (stackWidth(selected()) === 2 && target.row === next.row && next.column > target.column) {
+        next = { ...next, column: next.column + 1 };
+    }
+    processActions([
+        { type: "moveTo", position: next },
+        { type: "closeAttack", targetStack },
+        onTurnFinishing(),
+    ]);
+}
+async function doSpelling(action) {
+    const { spell, position } = action;
+    const stack = stackAtPosition(position);
+    if (!stack || !canTakeSpell({ stack, spell })) {
+        return;
+    }
+    switch (spell) {
+        case "frostRing":
+            await doAction({ type: "frostRing", point: { ...position, ...positionToPoint(position) } });
+            break;
+        case "lightning":
+        case "arrow": {
+            const { enemy, target } = enemyStackAt(position);
+            if (!target) {
+                return;
+            }
+            await processActions(magicAttack({
+                receiver: enemy,
+                attacker: currentSide(),
+                target,
+                spell,
+            }));
+            break;
+        }
+        case "berserk":
+        case "forgetfulness":
+        case "slow": {
+            const { target } = enemyStackAt(position);
+            if (!target) {
+                return;
+            }
+            await processActions([applyMagicEffect({
+                    targets: [target],
+                    spell,
+                    caster: currentSide(),
+                })]);
+            break;
+        }
+        case "teleport": {
+            const { target } = friendStackAt(position);
+            if (!target) {
+                return;
+            }
+            game = { ...game, type: "stackTeleporting", stackPosition: position };
             return;
         }
+        case "hast":
+        case "bless":
+        case "rage":
+        case "clone":
+        case "antiMagic":
+        case "airShield": {
+            const { target } = friendStackAt(position);
+            if (!target) {
+                return;
+            }
+            await processActions([applyMagicEffect({
+                    targets: [target],
+                    spell,
+                    caster: currentSide(),
+                })]);
+            break;
+        }
+        case "fireWall":
+            if (hexAt(position)?.type !== "empty") {
+                return;
+            }
+            globalHexes.push(fireWallHex(position));
+            break;
+        case "forceField":
+            if (hexAt(position)?.type !== "empty") {
+                return;
+            }
+            globalHexes.push({
+                ...position,
+                type: "obstacle",
+                kind: {
+                    type: "forceField",
+                    state: "appearing",
+                    animation: { duration: forceFieldDuration, frameCount: forceFieldAppearance.count, frame: 0 },
+                },
+            });
+            break;
+        case "hypnotize":
+            const stack = enemyStackAt(action.position)?.target;
+            if (!stack || stack.type === "clone") {
+                return;
+            }
+            await doAction(applyMagicEffect({ targets: [stack], spell: "hypnotize", caster: currentSide() }));
+            break;
+        default:
+            never(spell);
+    }
+    drawCeilHover(undefined);
+    game = { ...game, type: "battle" };
+    ensureAdded(game.heroesCastedSpell, stackOwnerHero(selected()));
+    return;
+}
+function doSpellSelectedAction(action) {
+    const { spell } = action;
+    switch (spell) {
+        case "summonAirElement":
+            return summonStack(stackOf("airElement", 10));
+        case "summonFireElement":
+            return summonStack(stackOf("fireElement", 10));
+        case "summonEarthElement":
+            return summonStack(stackOf("earthElement", 12));
+        case "summonWaterElement":
+            return summonStack(stackOf("waterElement", 11));
+    }
+    if (spellLevel(spell) === 3) {
+        switch (spell) {
+            // allow user to peek a spell hex
+            case "lightning":
+            case "arrow":
+            case "frostRing":
+            case "clone":
+            case "fireWall":
+            case "forceField":
+            case "antiMagic":
+            case "hypnotize":
+            case "teleport":
+            case "berserk":
+                game = { ...game, type: "gameSpelling", spell };
+                return;
+            case "forgetfulness":
+            case "slow": {
+                const caster = currentSide();
+                ensureAdded(game.heroesCastedSpell, caster.hero);
+                applyMagicEffect({ caster, spell, targets: stackEnemy(selected()).army });
+                return;
+            }
+            case "hast":
+            case "bless":
+            case "rage":
+            case "airShield": {
+                const caster = currentSide();
+                ensureAdded(game.heroesCastedSpell, caster.hero);
+                applyMagicEffect({ caster, spell, targets: caster.army });
+                return;
+            }
+            default:
+                never(spell);
+        }
+    }
+    game = { ...game, type: "gameSpelling", spell };
+    return;
+}
+//@ts-expect-error
+window.__actionExecuted = false;
+let entered = false;
+async function doAction(action) {
+    const thisEntered = entered;
+    if (!entered) {
+        entered = true;
+        //@ts-expect-error
+        window.__actionExecuted = false;
+    }
+    increaseSeed(1);
+    await internalDoAction(action);
+    updateUi();
+    if (!thisEntered) {
+        window.__actionExecuted = true;
+    }
+}
+async function internalDoAction(action) {
+    switch (action.type) {
         case "fireTwiceAt":
         case "fireAt": {
             const targetStack = stackAtPosition(action.hexPosition);
@@ -1870,9 +2232,7 @@ async function doAction(action) {
                     else {
                         attackActions.push({ type: "fireAt", hexPosition: action.hexPosition });
                     }
-                    for (const act of attackActions) {
-                        await doAction(act);
-                    }
+                    await processActions(attackActions);
                     resolve();
                 });
             });
@@ -1891,7 +2251,22 @@ async function doAction(action) {
             if (!target) {
                 return;
             }
-            if (selectedType() === "dendroid" && !samePositions(oldPosition, target)) {
+            const targetStack = stackAtPosition(action.targetPosition);
+            if (targetStack && currentEnemies().includes(targetStack)) {
+                await attackAt(action);
+                return;
+            }
+            await processActions([
+                { type: "moveTo", position: action.targetPosition },
+                onTurnFinishing(),
+            ]);
+            return;
+        }
+        case "moveTo": {
+            increaseSeed(action.position.row);
+            increaseSeed(action.position.column);
+            const oldPosition = positionOf(selected());
+            if (selectedType() && !samePositions(oldPosition, action.position)) {
                 availableHexPositionsFrom({
                     ...oldPosition,
                     radius: 1,
@@ -1909,29 +2284,7 @@ async function doAction(action) {
                     removeFromArray(toRealStack(stack).effects, effect);
                 });
             }
-            const targetStack = stackAtPosition(action.targetPosition);
-            if (targetStack && currentEnemies().includes(targetStack)) {
-                if (!available.find(h => samePositions(h, action.nextSelectedPosition))) {
-                    return;
-                }
-                const target = action.targetPosition;
-                let next = action.nextSelectedPosition;
-                if (stackWidth(selected()) === 2 && target.row === next.row && next.column > target.column) {
-                    next = { ...next, column: next.column + 1 };
-                }
-                await doAction({ type: "moveTo", position: next });
-                await doAction({ type: "closeAttack", targetStack });
-                await doAction(onTurnFinishing());
-                return;
-            }
-            await doAction({ type: "moveTo", position: action.targetPosition });
-            await doAction(onTurnFinishing());
-            return;
-        }
-        case "moveTo": {
-            increaseSeed(action.position.row);
-            increaseSeed(action.position.column);
-            return await moveSelectedStack(action, { row: action.position.row, column: action.position.column });
+            return await moveSelectedStack(action, action.position);
         }
         case "hitBack": {
             const args = action.args;
@@ -1959,7 +2312,6 @@ async function doAction(action) {
             if (first?.type !== "receiverDead" && shouldGetHitBack(attacker) && canHitBack(defender)) {
                 result.push({ type: "hitBack", args });
             }
-            result.push(onTurnFinishing());
             await processActions(result);
             return;
         }
@@ -1990,17 +2342,19 @@ async function doAction(action) {
                 return;
             }
             const position = positionOf(dead);
-            const army = stackOwner(dead).army;
+            const owner = stackOwner(dead);
+            const army = owner.army;
             removeFromArray(army, dead);
-            const index = hexes.findIndex(i => stackFromHex(i) === dead);
+            const index = globalHexes.findIndex(i => stackFromHex(i) === dead);
             if (index === -1) {
                 return;
             }
-            hexes.splice(index, 1);
-            hexesOfDead.push({ ...position, stack: dead });
+            globalHexes.splice(index, 1);
+            hexesOfDead.push({ ...position, stack: dead, owner });
             return;
         }
         case "nextTurn": {
+            ensureAdded(game.moved, selected());
             nextTurn();
             return;
         }
@@ -2010,21 +2364,22 @@ async function doAction(action) {
                 return;
             }
             const hex = hexAt(position);
-            const stackHex = stackHexFrom(hex);
-            if (!stackHex || !hex) {
+            if (!hex || hex.type !== "stack") {
                 return;
             }
+            const stackHex = hex;
             stackHex.freezing = { action, diff: 0, startMs: Date.now(), total: 0 };
-            const args = { hex, ...position };
-            const animate = () => {
-                if (!stackHex.freezing) {
-                    return;
-                }
-                animateFreeze(args);
-                requestAnimationFrame(animate);
-            };
-            animate();
-            return;
+            const args = { hex, row: position.row, column: position.column };
+            return new Promise(res => {
+                const animate = () => {
+                    if (!stackHex.freezing) {
+                        return;
+                    }
+                    animateFreeze(args, res);
+                    requestAnimationFrame(animate);
+                };
+                animate();
+            });
         }
         case "tryHealAndNextTurn": {
             ensureAdded(game.moved, selected());
@@ -2032,8 +2387,10 @@ async function doAction(action) {
             if (!stack) {
                 return await doAction({ type: "nextTurn" });
             }
-            await doAction({ stack, value: action.value, type: "heal" });
-            await doAction({ type: "nextTurn" });
+            await processActions([
+                { stack, value: action.value, type: "heal" },
+                { type: "nextTurn" },
+            ]);
             return;
         }
         case "heal": {
@@ -2153,10 +2510,10 @@ async function doAction(action) {
                 case "stack":
                     return;
                 case "empty":
-                    hexes.push(stackHex(clone, available.row, available.column));
+                    globalHexes.push(stackHex(clone, available.row, available.column));
                     return;
                 case "fireWall":
-                    hexes.push({
+                    globalHexes.push({
                         row: hex.row,
                         column: hex.column,
                         type: "stackFireWall",
@@ -2185,93 +2542,7 @@ async function doAction(action) {
             });
         }
         case "spelling": {
-            const { spell, position } = action;
-            const stack = stackAtPosition(position);
-            if (hasAntiMagic(stack)) {
-                return;
-            }
-            switch (spell) {
-                case "frostRing":
-                    await doAction({ type: "frostRing", point: { ...position, ...positionToPoint(position) } });
-                    break;
-                case "lightning":
-                case "arrow": {
-                    const { enemy, target } = enemyStackAt(position);
-                    if (!target) {
-                        return;
-                    }
-                    await processActions(magicAttack({
-                        receiver: enemy,
-                        attacker: currentSide(),
-                        target,
-                        spell,
-                    }));
-                    break;
-                }
-                case "forgetfulness":
-                case "slow": {
-                    const { target } = enemyStackAt(position);
-                    if (!target) {
-                        return;
-                    }
-                    await processActions([applyMagicEffect({
-                            targets: [target],
-                            spell,
-                            caster: currentSide(),
-                        })]);
-                    break;
-                }
-                case "hast":
-                case "bless":
-                case "rage":
-                case "clone":
-                case "antiMagic":
-                case "airShield": {
-                    const { target } = friendStackAt(position);
-                    if (!target) {
-                        return;
-                    }
-                    await processActions([applyMagicEffect({
-                            targets: [target],
-                            spell,
-                            caster: currentSide(),
-                        })]);
-                    break;
-                }
-                case "fireWall":
-                    if (hexAt(position)?.type !== "empty") {
-                        return;
-                    }
-                    hexes.push(fireWallHex(position));
-                    break;
-                case "forceField":
-                    if (hexAt(position)?.type !== "empty") {
-                        return;
-                    }
-                    hexes.push({
-                        ...position,
-                        type: "obstacle",
-                        kind: {
-                            type: "forceField",
-                            state: "appearing",
-                            animation: { duration: forceFieldDuration, frameCount: forceFieldAppearance.count, frame: 0 },
-                        },
-                    });
-                    break;
-                case "hypnotize":
-                    const stack = enemyStackAt(action.position)?.target;
-                    if (!stack || stack.type === "clone") {
-                        return;
-                    }
-                    await doAction(applyMagicEffect({ targets: [stack], spell: "hypnotize", caster: currentSide() }));
-                    break;
-                default:
-                    never(spell);
-            }
-            drawCeilHover(undefined);
-            game = { ...game, type: "battle" };
-            ensureAdded(game.heroesCastedSpell, stackOwnerHero(selected()));
-            break;
+            return await doSpelling(action);
         }
         case "select": {
             const stack = stackAtPosition(action.stackPosition);
@@ -2285,11 +2556,11 @@ async function doAction(action) {
             const stack = action.stack;
             const army = stackOwner(stack).army;
             removeFromArray(army, stack);
-            const index = hexes.findIndex(i => stackFromHex(i) === stack);
+            const index = globalHexes.findIndex(i => stackFromHex(i) === stack);
             if (index === -1) {
                 return;
             }
-            hexes.splice(index, 1);
+            globalHexes.splice(index, 1);
             return;
         }
         case "hypnotize": {
@@ -2332,6 +2603,32 @@ async function doAction(action) {
                     animations.drawImage(sprite.image, 
                     // xOffset + frame * xOffset + frame * frameWidth,
                     struct.frame * sprite.width, 0, sprite.width, sprite.height, position.x - widthDiff / 2, position.y - heightDiff / 2, hexWidth + widthDiff, hexHeight + heightDiff);
+                }
+            });
+        }
+        case "spellSelected": {
+            return doSpellSelectedAction(action);
+        }
+        case "teleport": {
+            const { targetPosition, stackPosition } = action;
+            const hex = hexAtRowColumn(stackPosition.row, stackPosition.column);
+            if (!hex || hex.type !== "stack") {
+                return;
+            }
+            removeHex(stackPosition.row, stackPosition.column);
+            globalHexes.push(stackHex(hex.stack, targetPosition.row, targetPosition.column));
+            return;
+        }
+        case "berserk": {
+            const sprite = berserkSprite;
+            const struct = { duration: 40, frameCount: sprite.count, frame: 0 };
+            const position = positionToPoint(positionOf(action.target));
+            return drawAnimation({
+                struct,
+                draw() {
+                    animations.drawImage(sprite.image, 
+                    // xOffset + frame * xOffset + frame * frameWidth,
+                    struct.frame * sprite.width, 0, sprite.width, sprite.height, position.x, position.y, hexWidth, hexHeight);
                 }
             });
         }
@@ -2380,7 +2677,7 @@ function hexAtPoint(point) {
 // region draw
 function drawQueue() {
     clearRect(queueCtx);
-    const queue = gameQueue();
+    const queue = ui.queue;
     const boxWidth = 60;
     const boxHeight = 40;
     const padding = 10;
@@ -2547,11 +2844,11 @@ function pathBetween({ start, end }) {
             .map(([column, row]) => ({ row: current.row + row, column: current.column + column }))
             .filter(n => {
             const type = hexAt(n)?.type;
-            return n.row >= 0 &&
+            return (n.row >= 0 &&
                 n.row <= lastRowIndex &&
                 n.column >= 0 &&
                 n.column <= lastColumnIndex && (type === "empty" ||
-                type === "fireWall");
+                type === "fireWall") || samePositions(n, end));
         });
         for (const neighbor of neighbors) {
             const tentativeG = gScore.get(key(current.row, current.column)) + 1;
@@ -2577,32 +2874,33 @@ function forceMove(hex) {
         return;
     }
     const targetPosition = stackHex.moving.targetPosition;
-    const index = hexes.findIndex(i => i === hex);
+    const index = globalHexes.findIndex(i => i === hex);
     if (index === -1) {
         return;
     }
-    hexes.splice(index, 1);
+    globalHexes.splice(index, 1);
     const old = hexAt(targetPosition);
     if (!old) {
         return;
     }
     stackHex.moving = undefined;
     if (old.type === "fireWall") {
-        hexes.push({ type: "stackFireWall", stackHex, fireWall: old, ...targetPosition });
+        globalHexes.push({ type: "stackFireWall", stackHex, fireWall: old, ...targetPosition });
     }
     else {
-        hexes.push({ ...stackHex, ...targetPosition });
+        globalHexes.push({ ...stackHex, ...targetPosition });
     }
 }
 const freezingTime = 1000;
 const lineCount = 5;
-function animateFreeze({ hex, row, column }) {
+function animateFreeze({ hex, row, column }, onFinished) {
     const stackHex = stackHexFrom(hex);
     if (!stackHex) {
-        return;
+        return onFinished();
     }
     const freeze = stackHex.freezing;
     if (!freeze) {
+        onFinished();
         return inAnimation = false;
     }
     inAnimation = true;
@@ -2610,6 +2908,7 @@ function animateFreeze({ hex, row, column }) {
         clearRect(animations);
         stackHex.freezing = undefined;
         inAnimation = false;
+        onFinished();
         return;
     }
     const diff = Date.now() - freeze.total - freeze.startMs;
@@ -2739,6 +3038,7 @@ function move(hex) {
     const moving = stackHex.moving;
     if (!moving) {
         inAnimation = false;
+        forceMove(hex);
         return;
     }
     inAnimation = true;
@@ -2806,7 +3106,7 @@ function drawStack(hex, x, y) {
     });
 }
 function hexIndex(row, column) {
-    return hexes.findIndex(i => i.row === row && i.column === column);
+    return globalHexes.findIndex(i => i.row === row && i.column === column);
 }
 function removeHex(row, column, replace) {
     const index = hexIndex(row, column);
@@ -2814,10 +3114,10 @@ function removeHex(row, column, replace) {
         return;
     }
     if (replace) {
-        hexes.splice(index, 1, replace);
+        globalHexes.splice(index, 1, replace);
     }
     else {
-        hexes.splice(index, 1);
+        globalHexes.splice(index, 1);
     }
 }
 function drawFireWall(hex, x, y, rowIndex, columnIndex, timestamp) {
@@ -2879,7 +3179,7 @@ function drawFireWall(hex, x, y, rowIndex, columnIndex, timestamp) {
 }
 function drawElements(timestamp) {
     clearRect(units);
-    hexes.forEach(hex => {
+    globalHexes.forEach(hex => {
         const { row, column } = hex;
         let x = columnHexX(row, column);
         let y = rowY(row);
@@ -3104,6 +3404,9 @@ function drawAvailableHexes(hexes) {
         availableHexes.stroke();
     });
 }
+function canFire() {
+    return hasAbilityToFire(selected()) && !hasEnemyAround();
+}
 function availableAttackHexes(position) {
     const hexes = availableHexPositionsFrom({
         row: position.row,
@@ -3111,7 +3414,7 @@ function availableAttackHexes(position) {
         radius: movementOf(selected()),
         type: "moveToAttack",
     });
-    if (canFire(selected()) && !hasEnemyAround()) {
+    if (canFire()) {
         hexes.push(...enemyHexes());
     }
     return hexes;
@@ -3125,6 +3428,17 @@ function enemyHexes() {
         hexes.push({ ...positionOf(stack), type: "attackable" });
     });
     return hexes;
+}
+function emptyHexes() {
+    const res = [];
+    grid.forEach((row, rowIndex) => {
+        row.forEach(columnIndex => {
+            if (hexAtRowColumn(rowIndex, columnIndex)?.type === "empty") {
+                res.push({ row: rowIndex, column: columnIndex });
+            }
+        });
+    });
+    return res;
 }
 function friendHexes() {
     return currentSide().army.map(positionOf);
@@ -3148,30 +3462,41 @@ const foeAidTentPosition = {
     x: rowX(aidTentRow, lastColumnIndex) + aidTentSprite.width,
     y: rowY(aidTentRow),
 };
-function drawBattlefield(timestamp) {
+const ui = {
+    availableHexes: [],
+    needDrawQueue: false,
+    allyBallista: undefined,
+    foeBallista: undefined,
+    allyAidTent: undefined,
+    foeAidTent: undefined,
+    queue: [],
+};
+function updateUi() {
     const position = positionOf(selected());
-    if (game.state.type === "end") {
-        drawText({
-            ctx: endedContext,
-            text: `${sideName(game.state.winner)} WIN`,
-            x: endedContext.canvas.width / 2,
-            y: endedContext.canvas.height / 2,
-            font: "50px Arial",
-        });
+    ui.allyBallista = ally().army.find(i => i.type === "ballista");
+    ui.foeBallista = foe().army.find(i => i.type === "ballista");
+    ui.allyAidTent = ally().army.find(i => i.type === "aidTent");
+    ui.foeAidTent = foe().army.find(i => i.type === "aidTent");
+    if (inAnimation) {
+        ui.availableHexes = [];
+        ui.needDrawQueue = true;
+        ui.queue = gameQueue(game.moved);
+        return;
     }
-    if (game.type === "spelling") {
+    if (game.type === "gameSpelling") {
         const spell = game.spell;
         switch (spell) {
             case "fireWall":
             case "forceField":
-            case "frostRing":
-                drawAvailableHexes([]);
+                ui.availableHexes = emptyHexes();
                 break;
+            case "frostRing":
             case "lightning":
             case "arrow":
             case "slow":
             case "forgetfulness":
-                drawAvailableHexes(enemyHexes());
+            case "berserk":
+                ui.availableHexes = enemyHexes();
                 break;
             case "hast":
             case "bless":
@@ -3179,33 +3504,81 @@ function drawBattlefield(timestamp) {
             case "clone":
             case "hypnotize":
             case "airShield":
+            case "teleport":
             case "antiMagic":
-                drawAvailableHexes(friendHexes());
+                ui.availableHexes = friendHexes();
                 break;
             default:
                 never(spell);
         }
-        drawQueue();
+        ui.needDrawQueue = true;
+    }
+    else if (game.type === "stackTeleporting") {
+        ui.availableHexes = emptyHexes();
     }
     else if (selectedType() === "ballista") {
-        drawAvailableHexes(enemyHexes());
-        drawQueue();
+        ui.availableHexes = enemyHexes();
+        ui.needDrawQueue = true;
     }
     else if (selectedType() === "aidTent") {
-        drawAvailableHexes(friendHexes());
-        drawQueue();
+        ui.availableHexes = friendHexes();
+        ui.needDrawQueue = true;
     }
     else if (!inAnimation && position && position.row !== -1) {
         if (!game.moved.includes(selected())) {
-            drawAvailableHexes(availableAttackHexes(position));
+            ui.availableHexes = availableAttackHexes(position);
         }
-        drawQueue();
+        ui.needDrawQueue = true;
     }
     else {
-        drawAvailableHexes([]);
+        ui.availableHexes = [];
+        ui.needDrawQueue = false;
     }
+    ui.queue = gameQueue(game.moved);
+}
+function casualtiesText(casualties) {
+    return Object.entries(casualties).map(([name, count]) => `${name}: ${count}`).join(", ");
+}
+function drawBattlefield(timestamp) {
+    const { availableHexes, needDrawQueue, allyBallista, foeBallista, allyAidTent, foeAidTent, } = ui;
+    if (game.type === "ended") {
+        const x = endedContext.canvas.width / 2;
+        const y = endedContext.canvas.height / 2;
+        drawText({
+            ctx: endedContext,
+            text: `${sideName(game.winner)} WINS`,
+            x,
+            y,
+            font: "50px Arial",
+        });
+        const allyCasualties = casualtiesText(game.casualties.ally);
+        if (allyCasualties) {
+            drawText({
+                ctx: endedContext,
+                text: `Ally: ${allyCasualties}`,
+                x,
+                y: y + 60,
+                font: "20px Arial",
+            });
+        }
+        const foeCasualties = casualtiesText(game.casualties.foe);
+        if (foeCasualties) {
+            drawText({
+                ctx: endedContext,
+                text: `Foe: ${foeCasualties}`,
+                x,
+                y: y + 90,
+                font: "20px Arial",
+            });
+        }
+    }
+    drawAvailableHexes(availableHexes);
+    if (needDrawQueue) {
+        drawQueue();
+    }
+    // get rid of it
     if (previousSelected !== selected()) {
-        if (canFire(selected())) {
+        if (hasAbilityToFire(selected())) {
             attackTypeBtn.style.display = "";
             game.attackType = { default: "fire" };
             updateAttackBtn();
@@ -3216,7 +3589,6 @@ function drawBattlefield(timestamp) {
         }
     }
     drawElements(timestamp);
-    const allyBallista = ally().army.find(i => i.type === "ballista");
     if (allyBallista) {
         drawStackInfo({
             ctx: units,
@@ -3226,7 +3598,6 @@ function drawBattlefield(timestamp) {
             stack: allyBallista,
         });
     }
-    const foeBallista = foe().army.find(i => i.type === "ballista");
     if (foeBallista) {
         drawStackInfo({
             ctx: units,
@@ -3237,27 +3608,26 @@ function drawBattlefield(timestamp) {
             stack: foeBallista,
         });
     }
-    const allyAid = ally().army.find(i => i.type === "aidTent");
-    if (allyAid) {
+    if (allyAidTent) {
         drawStackInfo({
             ctx: units,
             x: allyAidTentPosition.x,
             y: allyAidTentPosition.y,
             fillStyle: "red",
-            stack: allyAid,
+            stack: allyAidTent,
         });
     }
-    const foeAid = foe().army.find(i => i.type === "aidTent");
-    if (foeAid) {
+    if (foeAidTent) {
         drawStackInfo({
             ctx: units,
             x: foeAidTentPosition.x - hexWidth / 2,
             y: foeAidTentPosition.y + hexHeight / 4,
             fillStyle: "red",
-            stack: foeAid,
+            stack: foeAidTent,
             flip: true,
         });
     }
+    // get rid of it
     bookBtn.disabled = currentSidePlaying() && game.heroesCastedSpell.includes(stackOwnerHero(selected()));
     if (game.type === "battle") {
         waitedBtn.disabled = game.waited.includes(selected());
@@ -3335,7 +3705,6 @@ function initializedGame() {
     return {
         type: "battle",
         selected,
-        state: { type: "playing" },
         seed: defaultSeed,
         moved: [],
         defendedAttack: [],
@@ -3356,7 +3725,11 @@ let periodFrame = 0;
 let currentFrame = 0;
 let frameTimer = 0;
 const frameDuration = 180;
+let stopped = false;
 function nextTick(timestamp) {
+    if (stopped) {
+        return requestAnimationFrame(nextTick);
+    }
     if (!frameTimer)
         frameTimer = timestamp;
     const delta = timestamp - frameTimer;
@@ -3414,14 +3787,14 @@ function start() {
             case "action":
                 return doBroadcastAction(data.action);
             case "joined":
-                return broadcastEvent({ type: "game", game, hexes, hexesOfDead, ally: ally(), foe: foe() });
+                return broadcastEvent({ type: "game", game, hexes: globalHexes, hexesOfDead, ally: ally(), foe: foe() });
             case "game":
-                if (receivedGame || data.game.state.type === "end") {
+                if (receivedGame || data.game.type === "ended") {
                     return;
                 }
                 receivedGame = true;
                 game = data.game;
-                hexes = data.hexes;
+                globalHexes = data.hexes;
                 hexesOfDead = data.hexesOfDead;
                 return;
             default:
@@ -3429,8 +3802,9 @@ function start() {
         }
     };
     broadcastEvent({ type: "joined" });
-    onTurnStarted();
+    updateUi();
     requestAnimationFrame(nextTick);
+    onTurnStarted();
 }
 backgroundImage.onload = () => {
     const canvas = backgroundContext.canvas;
@@ -3438,7 +3812,7 @@ backgroundImage.onload = () => {
 };
 // endregion
 function finished() {
-    return game.state.type === "end";
+    return game.type === "ended";
 }
 battlefield.addEventListener("click", e => {
     const action = actionFromClick(e);
@@ -3451,6 +3825,12 @@ battlefield.addEventListener("click", e => {
 function broadcastEvent(event) {
     const message = JSOG.stringify(event);
     broadcast.postMessage(message);
+}
+function fireActionAt(position) {
+    if (hasAbilityToFireTwice(selected())) {
+        return { type: "fireTwiceAt", hexPosition: position };
+    }
+    return { type: "fireAt", hexPosition: position };
 }
 function actionFromClick(e) {
     if (bookOpened() || inAnimation || !currentSidePlaying() || finished()) {
@@ -3468,8 +3848,12 @@ function actionFromClick(e) {
     if (game.type === "tactic" && clicked.hex.type === "stack" && stackOwner(clicked.hex.stack) === game.side) {
         return { type: "select", stackPosition: position };
     }
-    if (game.type === "spelling") {
-        if (hasAntiMagic(stackAtPosition(position))) {
+    if (game.type === "stackTeleporting" && clicked.hex.type === "empty") {
+        return { type: "teleport", stackPosition: game.stackPosition, targetPosition: position };
+    }
+    if (game.type === "gameSpelling") {
+        const stack = stackAtPosition(position);
+        if (!stack || !canTakeSpell({ stack, spell: game.spell })) {
             return;
         }
         return { type: "spelling", spell: game.spell, position: position };
@@ -3477,11 +3861,8 @@ function actionFromClick(e) {
     if (selectedType() === "aidTent") {
         return { type: "tryHealAndNextTurn", stackPosition: position, value: 30 };
     }
-    if (canFire(selected()) && currentAttackType() === "fire" && !hasEnemyAround() && enemyStackAt(clicked).target) {
-        if (canFireTwice(selected())) {
-            return { type: "fireTwiceAt", hexPosition: position };
-        }
-        return { type: "fireAt", hexPosition: position };
+    if (canFire() && currentAttackType() === "fire" && enemyStackAt(clicked).target) {
+        return fireActionAt(position);
     }
     return { type: "clickAt", targetPosition: clicked, nextSelectedPosition: nextSelectedPosition(clicked) };
 }
@@ -3498,58 +3879,71 @@ battlefield.addEventListener("mousemove", e => {
         drawCeilHover(undefined);
         return;
     }
-    if (game.type === "spelling") {
-        const hex = hexAt(hovered);
-        if (!hex) {
-            return;
-        }
-        const spell = game.spell;
-        if (spell === "frostRing") {
-            return drawCeilHover(hovered);
-        }
-        if (spell === "fireWall" || spell === "forceField") {
-            if (hex.type !== "empty") {
+    const type = game.type;
+    switch (type) {
+        case "gameSpelling": {
+            const hex = hexAt(hovered);
+            if (!hex) {
                 return;
             }
-            return drawCeilHover(hovered);
-        }
-        const stack = stackFromHex(hex);
-        if (!stack) {
-            clearRect(availableHover);
+            const spell = game.spell;
+            if (spell === "frostRing") {
+                return drawCeilHover(hovered);
+            }
+            if (spell === "fireWall" || spell === "forceField") {
+                if (hex.type !== "empty") {
+                    return;
+                }
+                return drawCeilHover(hovered);
+            }
+            const stack = stackFromHex(hex);
+            if (!stack) {
+                clearRect(availableHover);
+                return;
+            }
+            // const isEnemy = realStackEnemy(selected()).army.includes(stack)
+            if (!stack || !canTakeSpell({ stack, spell })) {
+                return;
+            }
+            const isEnemy = realStackEnemy(selected()).army.includes(stack);
+            switch (spell) {
+                case "lightning":
+                case "arrow":
+                case "forgetfulness":
+                case "hypnotize":
+                    if (!isEnemy) {
+                        return;
+                    }
+                    return drawCeilHover(hovered);
+                case "slow":
+                case "hast":
+                case "bless":
+                case "rage":
+                case "airShield":
+                case "antiMagic":
+                case "clone":
+                case "teleport":
+                case "berserk":
+                    if (isEnemy) {
+                        return;
+                    }
+                    return drawCeilHover(hovered);
+                default:
+                    never(spell);
+            }
             return;
         }
-        // const isEnemy = realStackEnemy(selected()).army.includes(stack)
-        if (hasAntiMagic(stack)) {
+        case "stackTeleporting":
+            if (hexAt(hovered)?.type === "empty") {
+                return drawCeilHover(hovered);
+            }
             return;
-        }
-        const isEnemy = realStackEnemy(selected()).army.includes(stack);
-        switch (spell) {
-            case "lightning":
-            case "arrow":
-            case "forgetfulness":
-            case "hypnotize":
-                if (!isEnemy) {
-                    return;
-                }
-                return drawCeilHover(hovered);
-            case "slow":
-            case "hast":
-            case "bless":
-            case "rage":
-            case "airShield":
-            case "antiMagic":
-                if (isEnemy) {
-                    return;
-                }
-                return drawCeilHover(hovered);
-            case "clone":
-                if (isEnemy) {
-                    return;
-                }
-                return drawCeilHover(hovered);
-            default:
-                never(spell);
-        }
+        case "battle":
+        case "tactic":
+        case "ended":
+            break;
+        default:
+            never(type);
     }
     const speed = movementOf(selected());
     const position = positionOf(selected());
@@ -3593,3 +3987,4 @@ battlefield.addEventListener("mouseleave", () => {
     clearRect(availableHover);
 });
 start();
+//# sourceMappingURL=game.js.map

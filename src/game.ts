@@ -1,6 +1,7 @@
 // region of region
 
 interface BaseStack {
+  id: number
   count: number
   lastHealth: number
   initialCount: number
@@ -36,6 +37,7 @@ type RealStack = (BaseStack & {
 }) | Ballista | AidTent
 
 interface Cloned {
+  id: number
   type: "clone"
   copy: RealStack
 }
@@ -61,12 +63,18 @@ type Effect =
   | { type: "bless", duration: number, value: number }
   | { type: "airShield", duration: number, value: number }
 
+let __id = 0
+function newId() {
+  return __id += 1
+}
+
 function makeClone(target: Stack): Cloned {
-  return {type: "clone", copy: JSOG.parse(JSOG.stringify(target))}
+  return {id: newId(), type: "clone", copy: JSOG.parse(JSOG.stringify(target))}
 }
 
 function makeBallista(count = 1): Ballista {
   return {
+    id: newId(),
     count,
     type: "ballista",
     arrowsLeft: 20,
@@ -80,6 +88,7 @@ const aidTentHeal = 30
 
 function makeAidTent(count = 1): AidTent {
   return {
+    id: newId(),
     count,
     type: "aidTent",
     lastHealth: stackHealth.aidTent,
@@ -96,6 +105,7 @@ function stackOf(type: RealStackType, count = 1): RealStack {
     return makeBallista(count)
   }
   return <RealStack>{
+    id: newId(),
     count,
     type,
     lastHealth: stackHealth[type],
@@ -637,11 +647,13 @@ async function chase(target: Stack): Promise<"attacked" | "chasing"> {
     return "attacked"
   }
   const path = fullPath.slice(0, movementOf(current))
-  await doAction({
-    type: "moveTo",
-    position: lastItem(path),
-  })
-  await doAction(onTurnFinishing())
+  await processActions([
+    {
+      type: "moveTo",
+      position: lastItem(path),
+    },
+    onTurnFinishing()
+  ])
   return "chasing"
 }
 
@@ -2119,10 +2131,33 @@ function querySelector<T extends HTMLElement>(target: string): T {
 let horizontalIndent = 125
 let verticalIndent = 160
 
+//@ts-expect-error
+window.__allImages = [];
+//@ts-expect-error
+window.__imagesLoaded = Promise.resolve(); // will be replaced
+
 function imageOf(name: string) {
-  const image = new Image()
-  image.src = `/img/${name}.png`
-  return image
+  const image = new Image();
+  image.src = `/img/${name}.png`;
+  //@ts-expect-error
+  if (!window.__allImages) {
+    //@ts-expect-error
+    window.__allImages = []
+  }
+  //@ts-expect-error
+  window.__allImages.push(image);
+
+  //@ts-expect-error
+  window.__imagesLoaded = Promise.all(
+    //@ts-expect-error
+    window.__allImages.map(img =>
+      img.complete
+        ? Promise.resolve()
+        : new Promise(res => { img.onload = res; })
+    )
+  );
+
+  return image;
 }
 
 function updateAttackBtn() {
@@ -2402,8 +2437,18 @@ function nextSelectedPosition(position: ClickedHex): Position {
 // Action queue removed - using async/await instead
 
 async function processActions(actions: Action[]): Promise<void> {
+  const thisEntered = entered
+  if (!entered) {
+    entered = true
+    //@ts-expect-error
+    window.__actionExecuted = false
+  }
   for (const action of actions) {
     await doAction(action)
+  }
+  if (!thisEntered) {
+    window.__actionExecuted = true
+    entered = false
   }
 }
 
@@ -2592,9 +2637,11 @@ async function attackAt(action: Omit<ClickAtAction, "type">) {
   if (stackWidth(selected()) === 2 && target.row === next.row && next.column > target.column) {
     next = {...next, column: next.column + 1}
   }
-  await doAction({type: "moveTo", position: next})
-  await doAction({type: "closeAttack", targetStack})
-  await doAction(onTurnFinishing())
+  processActions([
+    {type: "moveTo", position: next},
+    {type: "closeAttack", targetStack},
+    onTurnFinishing(),
+  ])
 }
 
 async function doSpelling(action: SpellingAction) {
@@ -2747,10 +2794,23 @@ function doSpellSelectedAction(action: SpellSelectedAction) {
   return
 }
 
+//@ts-expect-error
+window.__actionExecuted = false
+let entered = false
 async function doAction(action: Action): Promise<void> {
+  const thisEntered = entered
+  if (!entered) {
+    entered = true
+    //@ts-expect-error
+    window.__actionExecuted = false
+  }
   increaseSeed(1)
   await internalDoAction(action)
   updateUi()
+  if (!thisEntered) {
+    window.__actionExecuted = true
+    entered = false
+  }
 }
 
 async function internalDoAction(action: Action): Promise<void> {
@@ -2801,8 +2861,10 @@ async function internalDoAction(action: Action): Promise<void> {
         await attackAt(action)
         return
       }
-      await doAction({type: "moveTo", position: action.targetPosition})
-      await doAction(onTurnFinishing())
+      await processActions([
+        {type: "moveTo", position: action.targetPosition},
+        onTurnFinishing(),
+      ])
       return
     }
     case "moveTo": {
@@ -2941,8 +3003,10 @@ async function internalDoAction(action: Action): Promise<void> {
       if (!stack) {
         return await doAction({type: "nextTurn"})
       }
-      await doAction({stack, value: action.value, type: "heal"})
-      await doAction({type: "nextTurn"})
+      await processActions([
+        {stack, value: action.value, type: "heal"},
+        {type: "nextTurn"},
+      ])
       return
     }
     case "heal": {
@@ -3817,6 +3881,7 @@ function move(hex: Hex): Promise<void> | void {
   const moving = stackHex.moving
   if (!moving) {
     inAnimation = false
+    forceMove(hex)
     return
   }
   inAnimation = true
