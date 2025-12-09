@@ -1474,6 +1474,12 @@ const defenceBtn = querySelector<HTMLButtonElement>("button.defence")
 defenceBtn.addEventListener("click", defence)
 const attackTypeBtn = querySelector<HTMLButtonElement>("button.attack-type")
 
+const battleStartAudio = new Audio("./audio/battleStart.mp3")
+
+querySelector(".game").addEventListener("click", () => {
+  battleStartAudio.play()
+})
+
 const waitedBtn = querySelector<HTMLButtonElement>("button.wait")
 waitedBtn.addEventListener("click", () => {
   wait()
@@ -2123,7 +2129,7 @@ function getCenter(vertices: Point[]) {
 function querySelector<T extends HTMLElement>(target: string): T {
   const item = document.querySelector(target)
   if (!item) {
-    throw new Error("Fuck")
+    throw new Error(`Can't find ${target}`)
   }
   return item as T
 }
@@ -2447,6 +2453,7 @@ async function processActions(actions: Action[]): Promise<void> {
     await doAction(action)
   }
   if (!thisEntered) {
+    // @ts-expect-error
     window.__actionExecuted = true
     entered = false
   }
@@ -2637,7 +2644,7 @@ async function attackAt(action: Omit<ClickAtAction, "type">) {
   if (stackWidth(selected()) === 2 && target.row === next.row && next.column > target.column) {
     next = {...next, column: next.column + 1}
   }
-  processActions([
+  return processActions([
     {type: "moveTo", position: next},
     {type: "closeAttack", targetStack},
     onTurnFinishing(),
@@ -2808,6 +2815,7 @@ async function doAction(action: Action): Promise<void> {
   await internalDoAction(action)
   updateUi()
   if (!thisEntered) {
+    // @ts-expect-error
     window.__actionExecuted = true
     entered = false
   }
