@@ -1449,6 +1449,7 @@ const hypnotizeSprite = {image: imageOf("hypnotize"), width: 99, height: 90, cou
 const antiMagicSprite = {image: imageOf("antiMagic"), width: 94, height: 126, count: 16}
 const forgetfulnessSprite = {image: imageOf("forgetfulness"), width: 119, height: 75, count: 15}
 const moraleSprite = {image: imageOf("morale"), width: 94, height: 127, count: 18}
+const freezingSprite = {image: imageOf("freezing"), width: 74, height: 49, count: 27}
 const slowSprite = {image: imageOf("slow"), width: 74, height: 54, count: 20}
 const angelSprite = {image: imageOf("angel"), width: 100, height: 110, count: 2, gap: 50}
 const dragonSprite = {image: imageOf("dragon"), width: 177, height: 110, count: 4, gap: 50}
@@ -2518,10 +2519,9 @@ function positionPointOf(stack: Stack): Point {
   }
 }
 
-async function drawAnimation({onFinished, struct, draw}: {
+async function drawAnimation({struct, draw}: {
   struct: AnimationStruct,
   draw: () => void,
-  onFinished?: () => void | Promise<void>
 }): Promise<void> {
   inAnimation = true
 
@@ -2531,11 +2531,7 @@ async function drawAnimation({onFinished, struct, draw}: {
       onAnimationTick(struct, timestamp)
       if (struct.runout) {
         inAnimation = false
-        if (onFinished) {
-          Promise.resolve(onFinished()).then(() => resolve())
-        } else {
-          resolve()
-        }
+        resolve()
         return
       }
       draw()
@@ -2930,8 +2926,7 @@ async function internalDoAction(action: Action): Promise<void> {
       return
     }
     case "flame": {
-      await drawFlame(action)
-      return
+      return drawFlame(action)
     }
     case "morale": {
       const sprite = moraleSprite
@@ -2991,18 +2986,27 @@ async function internalDoAction(action: Action): Promise<void> {
       if (!hex || hex.type !== "stack") {
         return
       }
-      const stackHex = hex
-      stackHex.freezing = {action, diff: 0, startMs: Date.now(), total: 0}
-      const args = {hex, row: position.row, column: position.column}
-      return new Promise(res => {
-        const animate = () => {
-          if (!stackHex.freezing) {
-            return
-          }
-          animateFreeze(args, res)
-          requestAnimationFrame(animate)
+      const sprite = freezingSprite
+      const struct: AnimationStruct = {duration: 50, frameCount: sprite.count, frame: 0}
+      const point = positionToPoint(position)
+
+      return drawAnimation({
+        struct,
+        draw() {
+          const xOffset = stackWidth(action.receiver) === 2 ? -hexHalfWidth : 0;
+          animations.drawImage(
+            sprite.image,
+            // xOffset + frame * xOffset + frame * frameWidth,
+            struct.frame * sprite.width,
+            0,
+            sprite.width,
+            sprite.height,
+            point.x + xOffset,
+            point.y,
+            hexWidth,
+            hexHeight
+          )
         }
-        animate()
       })
     }
     case "tryHealAndNextTurn": {
@@ -3105,19 +3109,8 @@ async function internalDoAction(action: Action): Promise<void> {
       const {point} = action
       const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
 
-      return drawAnimation({
+      await drawAnimation({
         struct,
-        onFinished: async () => {
-          const actions = stackHexForPosition({position: point, excludes: []}).flatMap(i => {
-            return magicAttack({
-              attacker: currentSide(),
-              receiver: stackOwner(i.stack),
-              target: i.stack,
-              spell: "frostRing",
-            })
-          })
-          await processActions(actions)
-        },
         draw() {
           animations.drawImage(
             sprite.image,
@@ -3133,6 +3126,14 @@ async function internalDoAction(action: Action): Promise<void> {
           )
         }
       })
+      return processActions(stackHexForPosition({position: point, excludes: []}).flatMap(i => {
+        return magicAttack({
+          attacker: currentSide(),
+          receiver: stackOwner(i.stack),
+          target: i.stack,
+          spell: "frostRing",
+        })
+      }))
     }
     case "hast": {
       const sprite = hastSprite
@@ -3226,7 +3227,7 @@ async function internalDoAction(action: Action): Promise<void> {
       })
     }
     case "spelling": {
-      return await doSpelling(action);
+      return doSpelling(action)
     }
     case "select": {
       const stack = stackAtPosition(action.stackPosition)
@@ -4912,6 +4913,9 @@ function finished() {
 }
 
 battlefield.addEventListener("click", e => {
+  if (stopped) {
+    return
+  }
   const action = actionFromClick(e)
   if (!action) {
     return
