@@ -927,7 +927,7 @@ function singleAttack(args: SingleAttackArgs): Action[] {
   const attack = fromDiapason(defenderHero.defence + defenceOf(defender) - attackerHero.attack, -9, 9) / 10
   const baseDamage = attackOf(args) * toRealStack(attacker).count
   const result = [applyDamage({damage: Math.round(baseDamage + baseDamage * attack), receiver: defender})]
-  if (result[0]?.type !== "receiverDead" && attacker.type === "dendroid") {
+  if (result[0]?.type !== "receiverDead" && !effectIn(defender, "freeze") && attacker.type === "dendroid") {
     toRealStack(defender).effects.push({type: "freeze", causer: attacker})
     result.push({type: "stopped", receiver: defender})
   }
@@ -2288,6 +2288,7 @@ function moveSelectedStack(action: Action, target: Position): Promise<void> {
   for (let i = 1; i < items.length - 1; i++) {
     const item = getCenter(allHexes[items[i].row][items[i].column])
     item.y += hexHeight / 4
+    item.x -= hexHalfWidth
     path.push(item)
   }
   path.push(positionToCoordinate(items[items.length - 1]))
