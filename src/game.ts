@@ -363,8 +363,10 @@ function attackOf(args: SingleAttackArgs): number {
   }
 }
 
-type MagicAttackSpell = "lightning" | "arrow" | "frostRing" | "fireWall"
+// m.b get rid of it?
+type MagicAttackSpell = "lightning" | "arrow" | "frostRing" | "fireWall" | "deathRipple"
 
+// m.b get rid of it?
 type MagicEffectSpell =
   | "slow"
   | "hast"
@@ -377,9 +379,11 @@ type MagicEffectSpell =
   | "antiMagic"
   | "forgetfulness"
 
-type RequiredPositionSpell = MagicAttackSpell | MagicEffectSpell | "forceField" | "teleport"
 type Spell =
-  RequiredPositionSpell
+  | MagicAttackSpell
+  | MagicEffectSpell
+  | "forceField"
+  | "teleport"
   | "summonAirElement"
   | "summonFireElement"
   | "summonEarthElement"
@@ -406,6 +410,7 @@ const spellSchool: Record<Spell, MagicSchool> = {
   hast: "air",
   bless: "water",
   rage: "fire",
+  deathRipple: "earth",
 }
 
 const spellDamage: Record<MagicAttackSpell, number> = {
@@ -413,6 +418,7 @@ const spellDamage: Record<MagicAttackSpell, number> = {
   arrow: 30,
   lightning: 50,
   fireWall: 20,
+  deathRipple: 10,
 }
 
 function spellLevel(spell: Spell) {
@@ -1406,6 +1412,7 @@ function makeAlly(): Side {
     spells: [
       "berserk",
       "lightning",
+      "deathRipple",
     ],
   }
 
@@ -1459,6 +1466,7 @@ const ballistaSprite = {image: imageOf("ballista"), width: 135, height: 110, cou
 const blessSprite = {image: imageOf("bless"), width: 43, height: 123, count: 20}
 const shieldSprite = {image: imageOf("shield"), width: 56, height: 73, count: 16}
 const frostRingSprite = {image: imageOf("frostRing"), width: 135, height: 130, count: 15}
+const deathRippleSprite = {image: imageOf("deathRipple"), width: 134, height: 134, count: 15}
 const aidTentSprite = {image: imageOf("firstAidTent"), width: 100, height: 130, count: 6, gap: 16}
 const resistanceSprite = {image: imageOf("resistance"), width: 91, height: 85, count: 20}
 const fireWallAppearSprite = {image: imageOf("fireWallAppear"), width: 44, height: 132, count: 8}
@@ -1478,7 +1486,7 @@ const attackTypeBtn = querySelector<HTMLButtonElement>("button.attack-type")
 const battleStartAudio = new Audio("./audio/battleStart.mp3")
 
 querySelector(".game").addEventListener("click", () => {
-  battleStartAudio.play()
+  // battleStartAudio.play()
 })
 
 const waitedBtn = querySelector<HTMLButtonElement>("button.wait")
@@ -1666,7 +1674,7 @@ interface SpellSelectedAction {
 
 interface SpellingAction {
   type: "spelling",
-  spell: RequiredPositionSpell,
+  spell: Spell,
   position: Position
 }
 
@@ -2648,7 +2656,7 @@ async function attackAt(action: Omit<ClickAtAction, "type">) {
   ])
 }
 
-async function doSpelling(action: SpellingAction) {
+async function doSpellOnTarget(action: SpellingAction) {
   const {spell, position} = action
   const stack = stackAtPosition(position)
   if (!stack || !canTakeSpell({stack, spell})) {
@@ -2738,6 +2746,12 @@ async function doSpelling(action: SpellingAction) {
       }
       await doAction(applyMagicEffect({targets: [stack], spell: "hypnotize", caster: currentSide()}))
       break
+    case "deathRipple":
+    case "summonAirElement":
+    case "summonEarthElement":
+    case "summonWaterElement":
+    case "summonFireElement":
+      break
     default:
       never(spell)
   }
@@ -2747,7 +2761,7 @@ async function doSpelling(action: SpellingAction) {
   return
 }
 
-function doSpellSelectedAction(action: SpellSelectedAction) {
+async function doSpellSelectedAction(action: SpellSelectedAction) {
   const {spell} = action
   switch (spell) {
     case "summonAirElement":
@@ -2780,6 +2794,44 @@ function doSpellSelectedAction(action: SpellSelectedAction) {
         ensureAdded(game.heroesCastedSpell, caster.hero)
         applyMagicEffect({caster, spell, targets: stackEnemy(selected()).army})
         return
+      }
+      case "deathRipple": {
+        const caster = currentSide()
+        ensureAdded(game.heroesCastedSpell, caster.hero)
+
+        const sprite = deathRippleSprite
+        const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+        const allUnits = [...ally().army, ...foe().army]
+        const targets = allUnits.filter(stack => unitKind(stack) !== "undead")
+        const actions = processActions(targets.flatMap(stack => {
+          return magicAttack({
+            attacker: currentSide(),
+            receiver: stackOwner(stack),
+            target: stack,
+            spell: "deathRipple",
+          })
+        }))
+        const points = stackPoints(targets)
+        await drawAnimation({
+          struct,
+          draw() {
+            points.forEach(position => {
+              animations.drawImage(
+                sprite.image,
+                // xOffset + frame * xOffset + frame * frameWidth,
+                struct.frame * sprite.width,
+                0,
+                sprite.width,
+                sprite.height,
+                position.x,
+                position.y,
+                hexWidth,
+                hexHeight
+              )
+            })
+          }
+        })
+        return actions
       }
       case "hast":
       case "bless":
@@ -3228,7 +3280,7 @@ async function internalDoAction(action: Action): Promise<void> {
       })
     }
     case "spelling": {
-      return doSpelling(action)
+      return doSpellOnTarget(action)
     }
     case "select": {
       const stack = stackAtPosition(action.stackPosition)
@@ -4539,6 +4591,12 @@ function updateUi() {
       case "antiMagic":
         ui.availableHexes = friendHexes()
         break
+      case "deathRipple":
+      case "summonAirElement":
+      case "summonEarthElement":
+      case "summonWaterElement":
+      case "summonFireElement":
+        break
       default:
         never(spell)
     }
@@ -4747,7 +4805,7 @@ type Casualties = Record<Stack["type"], number>
 
 type BaseGame =
   | { type: "battle" }
-  | { type: "gameSpelling", spell: RequiredPositionSpell }
+  | { type: "gameSpelling", spell: Spell }
   | { type: "tactic", side: Side, level: number }
   | { type: "stackTeleporting", stackPosition: Position }
   | { type: "ended", winner: Side, casualties: { ally: Casualties, foe: Casualties } }
@@ -5031,16 +5089,21 @@ battlefield.addEventListener("mousemove", e => {
         case "airShield":
         case "antiMagic":
         case "clone":
-        case "teleport":
-        case "berserk":
+          case "teleport":
+          case "berserk":
           if (isEnemy) {
             return
           }
           return drawCeilHover(hovered)
+        case "deathRipple":
+        case "summonAirElement":
+        case "summonEarthElement":
+        case "summonWaterElement":
+        case "summonFireElement":
+          return
         default:
-          never(spell)
+          return never(spell)
       }
-      return
     }
     case "stackTeleporting":
       if (hexAt(hovered)?.type === "empty") {
