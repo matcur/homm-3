@@ -364,7 +364,7 @@ function attackOf(args: SingleAttackArgs): number {
 }
 
 // m.b get rid of it?
-type MagicAttackSpell = "lightning" | "arrow" | "frostRing" | "fireWall" | "deathRipple"
+type MagicAttackSpell = "lightning" | "arrow" | "frostRing" | "fireWall" | "deathRipple" | "meteorShower"
 
 // m.b get rid of it?
 type MagicEffectSpell =
@@ -390,6 +390,7 @@ type Spell =
   | "summonWaterElement"
 
 const spellSchool: Record<Spell, MagicSchool> = {
+  meteorShower: "earth",
   forgetfulness: "water",
   antiMagic: "earth",
   teleport: "water",
@@ -419,6 +420,7 @@ const spellDamage: Record<MagicAttackSpell, number> = {
   lightning: 50,
   fireWall: 20,
   deathRipple: 10,
+  meteorShower: 60,
 }
 
 function spellLevel(spell: Spell) {
@@ -1410,6 +1412,7 @@ function makeAlly(): Side {
       stackOf("dendroid", 15),
     ],
     spells: [
+      "meteorShower",
       "berserk",
       "lightning",
       "deathRipple",
@@ -1467,6 +1470,7 @@ const blessSprite = {image: imageOf("bless"), width: 43, height: 123, count: 20}
 const shieldSprite = {image: imageOf("shield"), width: 56, height: 73, count: 16}
 const frostRingSprite = {image: imageOf("frostRing"), width: 135, height: 130, count: 15}
 const deathRippleSprite = {image: imageOf("deathRipple"), width: 134, height: 134, count: 15}
+const meteorsSprite = {image: imageOf("meteors"), width: 200, height: 200, count: 20}
 const aidTentSprite = {image: imageOf("firstAidTent"), width: 100, height: 130, count: 6, gap: 16}
 const resistanceSprite = {image: imageOf("resistance"), width: 91, height: 85, count: 20}
 const fireWallAppearSprite = {image: imageOf("fireWallAppear"), width: 44, height: 132, count: 8}
@@ -1840,6 +1844,57 @@ function stackHexFor({excludes, attacker}: TargetHexPositionsForArgs): StackHexF
 }
 
 type StackHexFor = (Position & { type: "attackable", stack: Stack })
+
+function positionsInRadius({position, radius}: {position: Position, radius: number}): Hex[] {
+  const {row, column} = position
+  const rows = grid.length
+  const cols = grid[0].length
+  const visited: boolean[][] = Array.from({length: rows}, () => Array(cols).fill(false))
+  const queue: { column: number, row: number, dist: number }[] = [{column, row, dist: 0}]
+  visited[row][column] = true
+  
+  const result: Hex[] = []
+  
+  while (queue.length > 0) {
+    const item = queue.shift()
+    if (!item) {
+      continue
+    }
+    const {column, row, dist} = item
+    
+    // Check if there's a hex at this position in globalHexes
+    const hex = hexAtRowColumn(row, column)
+    if (hex) {
+      result.push(hex)
+    }
+    
+    // If we've reached the radius limit, don't explore further
+    if (dist >= radius) {
+      continue
+    }
+    
+    // Explore neighbors using directions
+    for (const [dx, dy] of directions[isEvenRow(row) ? "even" : "odd"]) {
+      const nColumn = column + dx
+      const nRow = row + dy
+      
+      // Check bounds
+      if (nColumn < 0 || nRow < 0 || nColumn >= cols || nRow >= rows) {
+        continue
+      }
+      
+      // Skip if already visited
+      if (visited[nRow][nColumn]) {
+        continue
+      }
+      
+      visited[nRow][nColumn] = true
+      queue.push({column: nColumn, row: nRow, dist: dist + 1})
+    }
+  }
+  
+  return result
+}
 
 function stackHexForPosition({position: {row, column}, excludes}: {
   position: Position,
@@ -2656,14 +2711,60 @@ async function attackAt(action: Omit<ClickAtAction, "type">) {
   ])
 }
 
-async function doSpellOnTarget(action: SpellingAction) {
+function meteorShowerAvailableHexes(position: Position): Hex[] {
+  return positionsInRadius({position, radius: 1})
+}
+
+async function doSpellOnPosition(action: SpellingAction) {
   const {spell, position} = action
   const stack = stackAtPosition(position)
-  if (!stack || !canTakeSpell({stack, spell})) {
+  if (stack && !canTakeSpell({stack, spell})) {
+    return
+  }
+  if (spell === "meteorShower") {
+    const attacker = stackOwner(selected())
+    const actions = meteorShowerAvailableHexes(position).flatMap(i => {
+      const target = stackAtPosition(i)
+      if (!target) {
+        return []
+      }
+      return magicAttack({
+        receiver: stackOwner(target),
+        attacker,
+        target,
+        spell,
+      })
+    })
+    const sprite = meteorsSprite
+    const struct: AnimationStruct = {duration: 50, frameCount: sprite.count, frame: 0}
+    const point = positionToPoint(position)
+    const addWidth = hexWidth * 2
+    const addHeight = hexHeight * 2
+    await drawAnimation({
+      struct,
+      draw() {
+        animations.drawImage(
+          sprite.image,
+          // xOffset + frame * xOffset + frame * frameWidth,
+          struct.frame * sprite.width,
+          0,
+          sprite.width,
+          sprite.height,
+          point.x - addWidth / 2,
+          point.y - addHeight / 2,
+          hexWidth + addWidth,
+          hexHeight + addHeight
+        )
+      }
+    })
+    return await processActions(actions)
+  }
+  if (!stack) {
     return
   }
   switch (spell) {
     case "frostRing":
+      // get rid of it
       await doAction({type: "frostRing", point: {...position, ...positionToPoint(position)}})
       break
     case "lightning":
@@ -2786,6 +2887,7 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
       case "hypnotize":
       case "teleport":
       case "berserk":
+      case "meteorShower":
         game = {...game, type: "gameSpelling", spell}
         return
       case "forgetfulness":
@@ -2799,8 +2901,6 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
         const caster = currentSide()
         ensureAdded(game.heroesCastedSpell, caster.hero)
 
-        const sprite = deathRippleSprite
-        const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
         const allUnits = [...ally().army, ...foe().army]
         const targets = allUnits.filter(stack => unitKind(stack) !== "undead")
         const actions = processActions(targets.flatMap(stack => {
@@ -2811,7 +2911,10 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
             spell: "deathRipple",
           })
         }))
+
         const points = stackPoints(targets)
+        const sprite = deathRippleSprite
+        const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
         await drawAnimation({
           struct,
           draw() {
@@ -3280,7 +3383,7 @@ async function internalDoAction(action: Action): Promise<void> {
       })
     }
     case "spelling": {
-      return doSpellOnTarget(action)
+      return doSpellOnPosition(action)
     }
     case "select": {
       const stack = stackAtPosition(action.stackPosition)
@@ -3494,12 +3597,20 @@ function drawQueue() {
   })
 }
 
+function drawCeilsHover(positions: Position[]) {
+  clearRect(availableHover)
+  positions.forEach(fillCeil)
+}
+
 function drawCeilHover(hex?: Position) {
   clearRect(availableHover)
   if (!hex) {
     return
   }
+  fillCeil(hex);
+}
 
+function fillCeil(hex: Position) {
   let angelDeg = startAngleDeg
   let y = rowY(hex.row)
   let x = rowX(hex.row, hex.column)
@@ -4569,6 +4680,9 @@ function updateUi() {
   if (game.type === "gameSpelling") {
     const spell = game.spell
     switch (spell) {
+      case "meteorShower":
+        ui.availableHexes = [...enemyHexes(), ...friendHexes()]
+        break
       case "fireWall":
       case "forceField":
         ui.availableHexes = emptyHexes()
@@ -5017,10 +5131,6 @@ function actionFromClick(e: { clientX: number, clientY: number }): BroadcastActi
     return {type: "teleport", stackPosition: game.stackPosition, targetPosition: position}
   }
   if (game.type === "gameSpelling") {
-    const stack = stackAtPosition(position);
-    if (!stack || !canTakeSpell({stack, spell: game.spell})) {
-      return
-    }
     return {type: "spelling", spell: game.spell, position: position}
   }
   if (selectedType() === "aidTent") {
@@ -5062,6 +5172,9 @@ battlefield.addEventListener("mousemove", e => {
           return
         }
         return drawCeilHover(hovered)
+      }
+      if (spell === "meteorShower") {
+        return drawCeilsHover(meteorShowerAvailableHexes(hovered))
       }
       const stack = stackFromHex(hex)
       if (!stack) {
