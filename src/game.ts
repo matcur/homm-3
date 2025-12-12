@@ -567,7 +567,7 @@ function nextInQueue() {
   return stack
 }
 
-function armyHas(army: Stack[]) {
+function armyHasFighters(army: Stack[]) {
   for (let i = 0; i < army.length; i++) {
     const stack = army[i];
     if (stack.type !== "clone" && unitKind(stack) !== "machine") {
@@ -605,10 +605,10 @@ function casualties(): { ally: Casualties, foe: Casualties } {
 }
 
 function nextTurn() {
-  if (!armyHas(ally().army)) {
+  if (!armyHasFighters(ally().army)) {
     return game = {...game, type: "ended", winner: foe(), casualties: casualties()}
   }
-  if (!armyHas(foe().army)) {
+  if (!armyHasFighters(foe().army)) {
     return game = {...game, type: "ended", winner: ally(), casualties: casualties()}
   }
   const selected = nextInQueue()
@@ -5202,8 +5202,8 @@ battlefield.addEventListener("mousemove", e => {
         case "airShield":
         case "antiMagic":
         case "clone":
-          case "teleport":
-          case "berserk":
+        case "teleport":
+        case "berserk":
           if (isEnemy) {
             return
           }
