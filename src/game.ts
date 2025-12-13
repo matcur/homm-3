@@ -1454,6 +1454,7 @@ const forceFieldExists = {image: forceFieldImage, width: 61, height: 136, countO
 const forceFieldDisappearance = {image: forceFieldImage, width: 61, height: 136, countOffset: 11, count: 4}
 const forceFieldDuration = 60
 const hastSprite = {image: imageOf("hast"), width: 113, height: 106, count: 15}
+const herosSprite = {image: imageOf("heroes"), width: 150, height: 183, count: 20}
 const berserkSprite = {image: imageOf("berserk"), width: 61, height: 99, count: 12}
 const hypnotizeSprite = {image: imageOf("hypnotize"), width: 99, height: 90, count: 19}
 const antiMagicSprite = {image: imageOf("antiMagic"), width: 94, height: 126, count: 16}
@@ -2571,10 +2572,10 @@ function stackPoints(stacks: Stack[]): Point[] {
 function positionPointOf(stack: Stack): Point {
   switch (stack.type) {
     case "aidTent": {
-      return stackOwner(stack) === ally() ? allyAidTentPosition : foeAidTentPosition
+      return stackOwner(stack) === ally() ? allyAidTentPoint : foeAidTentPoint
     }
     case "ballista": {
-      return stackOwner(stack) === ally() ? allyBallistaPosition : foeBallistaPosition
+      return stackOwner(stack) === ally() ? allyBallistaPoint : foeBallistaPoint
     }
     default: {
       const position = positionOf(stack)
@@ -4231,8 +4232,8 @@ function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, 
 }
 
 function drawElements(timestamp: number) {
-  clearRect(units)
-  globalHexes.forEach(hex => {
+  clearRect(units);
+  [...globalHexes].sort((a, b) => b.row - a.row).forEach(hex => {
     const {row, column} = hex
     let x = columnHexX(row, column)
     let y = rowY(row)
@@ -4637,20 +4638,28 @@ function friendHexes(): AvailableHex[] {
 let previousSelected: Stack | undefined = undefined
 
 const ballistaRow = 2
-const allyBallistaPosition: Point = {
+// const allyHeroPoint: Point = {
+//   x: -hexWidth,
+//   y: rowY(0) - hexHeight,
+// }
+const allyHeroPoint: Point = {
+  x: rowX(0, 0) - hexWidth * 2,
+  y: rowY(0) - hexHeight * 2,
+}
+const allyBallistaPoint: Point = {
   x: rowX(ballistaRow, 0) - ballistaSprite.width,
   y: rowY(ballistaRow),
 } as const
-const foeBallistaPosition: Point = {
+const foeBallistaPoint: Point = {
   x: rowX(ballistaRow, lastColumnIndex) + ballistaSprite.width,
   y: rowY(ballistaRow),
 } as const
 const aidTentRow = 4
-const allyAidTentPosition: Point = {
+const allyAidTentPoint: Point = {
   x: rowX(aidTentRow, 0) - aidTentSprite.width,
   y: rowY(aidTentRow),
 } as const
-const foeAidTentPosition: Point = {
+const foeAidTentPoint: Point = {
   x: rowX(aidTentRow, lastColumnIndex) + aidTentSprite.width,
   y: rowY(aidTentRow),
 } as const
@@ -4795,11 +4804,22 @@ function drawBattlefield(timestamp: number) {
     }
   }
   drawElements(timestamp)
+  units.drawImage(
+    herosSprite.image,
+    currentFrame * herosSprite.width,
+    0,
+    herosSprite.width,
+    herosSprite.height,
+    allyHeroPoint.x,
+    allyHeroPoint.y,
+    herosSprite.width,
+    herosSprite.height
+  )
   if (allyBallista) {
     drawStackInfo({
       ctx: units,
-      x: allyBallistaPosition.x,
-      y: allyBallistaPosition.y,
+      x: allyBallistaPoint.x,
+      y: allyBallistaPoint.y,
       fillStyle: "red",
       stack: allyBallista,
     })
@@ -4807,8 +4827,8 @@ function drawBattlefield(timestamp: number) {
   if (foeBallista) {
     drawStackInfo({
       ctx: units,
-      x: foeBallistaPosition.x,
-      y: foeBallistaPosition.y,
+      x: foeBallistaPoint.x,
+      y: foeBallistaPoint.y,
       flip: true,
       fillStyle: "red",
       stack: foeBallista,
@@ -4817,8 +4837,8 @@ function drawBattlefield(timestamp: number) {
   if (allyAidTent) {
     drawStackInfo({
       ctx: units,
-      x: allyAidTentPosition.x,
-      y: allyAidTentPosition.y,
+      x: allyAidTentPoint.x,
+      y: allyAidTentPoint.y,
       fillStyle: "red",
       stack: allyAidTent,
     })
@@ -4826,8 +4846,8 @@ function drawBattlefield(timestamp: number) {
   if (foeAidTent) {
     drawStackInfo({
       ctx: units,
-      x: foeAidTentPosition.x - hexWidth / 2,
-      y: foeAidTentPosition.y + hexHeight / 4,
+      x: foeAidTentPoint.x - hexWidth / 2,
+      y: foeAidTentPoint.y + hexHeight / 4,
       fillStyle: "red",
       stack: foeAidTent,
       flip: true,
