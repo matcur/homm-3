@@ -1454,7 +1454,7 @@ const forceFieldExists = {image: forceFieldImage, width: 61, height: 136, countO
 const forceFieldDisappearance = {image: forceFieldImage, width: 61, height: 136, countOffset: 11, count: 4}
 const forceFieldDuration = 60
 const hastSprite = {image: imageOf("hast"), width: 113, height: 106, count: 15}
-const herosSprite = {image: imageOf("heroes"), width: 150, height: 183, count: 20}
+const heroesSprite = {image: imageOf("heroes"), width: 150, height: 183, count: 20}
 const berserkSprite = {image: imageOf("berserk"), width: 61, height: 99, count: 12}
 const hypnotizeSprite = {image: imageOf("hypnotize"), width: 99, height: 90, count: 19}
 const antiMagicSprite = {image: imageOf("antiMagic"), width: 94, height: 126, count: 16}
@@ -4805,15 +4805,15 @@ function drawBattlefield(timestamp: number) {
   }
   drawElements(timestamp)
   units.drawImage(
-    herosSprite.image,
-    currentFrame * herosSprite.width,
-    0,
-    herosSprite.width,
-    herosSprite.height,
+    heroesSprite.image,
+    totalFrame % heroesSprite.count * heroesSprite.width,
+    heroesSprite.height,
+    heroesSprite.width,
+    heroesSprite.height,
     allyHeroPoint.x,
     allyHeroPoint.y,
-    herosSprite.width,
-    herosSprite.height
+    heroesSprite.width,
+    heroesSprite.height
   )
   if (allyBallista) {
     drawStackInfo({
@@ -4991,6 +4991,7 @@ let lastMs = Date.now()
 let framed = 0
 
 const frameCount = 4
+let totalFrame = 0
 let periodFrame = 0
 let currentFrame = 0
 let frameTimer = 0
@@ -5006,6 +5007,7 @@ function nextTick(timestamp: number) {
 
   const delta = timestamp - frameTimer
   if (delta >= frameDuration) {
+    totalFrame += 1
     if (periodFrame < (frameCount - 1)) {
       periodFrame += 1
       currentFrame += 1
