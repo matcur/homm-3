@@ -911,7 +911,7 @@ interface ColumnRowInLineArgs {
 
 function columnRowInLine({attacker, defender}: ColumnRowInLineArgs): HexAtPoint | undefined {
   const attack = positionPointOf(attacker);
-  const normalized = normalizedPosition(positionPointOf(defender), attack)
+  const normalized = normalizedVector(attack, positionPointOf(defender))
   attack.x += normalized.x * hexWidth * 2
   attack.y += normalized.y * hexHeight * 2
 
@@ -1412,6 +1412,7 @@ function makeAlly(): Side {
       stackOf("dendroid", 15),
     ],
     spells: [
+      "arrow",
       "meteorShower",
       "berserk",
       "lightning",
@@ -1464,6 +1465,7 @@ const freezingSprite = {image: imageOf("freezing"), width: 74, height: 49, count
 const slowSprite = {image: imageOf("slow"), width: 74, height: 54, count: 20}
 const angelSprite = {image: imageOf("angel"), width: 100, height: 110, count: 2, gap: 50}
 const dragonSprite = {image: imageOf("dragon"), width: 177, height: 110, count: 4, gap: 50}
+const arrowSprite = {image: imageOf("arrow"), width: 128, height: 33, count: 9}
 const dendroidSprite = {image: imageOf("dendroid"), width: 90, height: 115, count: 2, gap: 60, offset: 175}
 const archerSprite = {image: imageOf("archer"), width: 70, height: 85, count: 6, gap: 33, offset: 110}
 const ballistaSprite = {image: imageOf("ballista"), width: 135, height: 110, count: 1}
@@ -1706,7 +1708,7 @@ type BaseAction =
   | { type: "hypnotize", target: Stack }
   | { type: "forgetfulness", target: Stack }
   | { type: "frostRing", point: ClickedHex }
-  | { type: "slow" | "hast" | "bless" | "rage" | "airShield", targets: Stack[] }
+  | { type: "slow" | "hast" | "bless" | "rage" | "airShield" | "arrow", targets: Stack[] }
   | { type: "antiMagic", target: Stack }
   | { type: "reflect", source: Stack, effects: Action[] }
   | { type: "hitBack", args: CloseAttackArgs }
@@ -1769,7 +1771,7 @@ interface ObstacleHex {
   kind: { type: "default" } | {
     type: "forceField",
     state: "appearing" | "exists" | "disappearing",
-    animation: AnimationStruct
+    animation: OnceAnimation
   }
 }
 
@@ -1778,7 +1780,7 @@ interface FireWallHex {
   row: number
   column: number
   state: "appearing" | "fires" | "disappearing"
-  animation: AnimationStruct
+  animation: OnceAnimation
   stack?: Stack
 }
 
@@ -1814,7 +1816,7 @@ function fireWallHex(position: Position): FireWallHex {
     ...position,
     type: "fireWall",
     state: "appearing",
-    animation: {duration: fireWallDuration, frameCount: fireWallAppearSprite.count, frame: 0}
+    animation: {duration: fireWallDuration, frameCount: fireWallAppearSprite.count, frame: 0, type: "once"},
   }
 }
 
@@ -1853,47 +1855,47 @@ function positionsInRadius({position, radius}: {position: Position, radius: numb
   const visited: boolean[][] = Array.from({length: rows}, () => Array(cols).fill(false))
   const queue: { column: number, row: number, dist: number }[] = [{column, row, dist: 0}]
   visited[row][column] = true
-  
+
   const result: Hex[] = []
-  
+
   while (queue.length > 0) {
     const item = queue.shift()
     if (!item) {
       continue
     }
     const {column, row, dist} = item
-    
+
     // Check if there's a hex at this position in globalHexes
     const hex = hexAtRowColumn(row, column)
     if (hex) {
       result.push(hex)
     }
-    
+
     // If we've reached the radius limit, don't explore further
     if (dist >= radius) {
       continue
     }
-    
+
     // Explore neighbors using directions
     for (const [dx, dy] of directions[isEvenRow(row) ? "even" : "odd"]) {
       const nColumn = column + dx
       const nRow = row + dy
-      
+
       // Check bounds
       if (nColumn < 0 || nRow < 0 || nColumn >= cols || nRow >= rows) {
         continue
       }
-      
+
       // Skip if already visited
       if (visited[nRow][nColumn]) {
         continue
       }
-      
+
       visited[nRow][nColumn] = true
       queue.push({column: nColumn, row: nRow, dist: dist + 1})
     }
   }
-  
+
   return result
 }
 
@@ -2316,7 +2318,7 @@ grid.forEach((row, rowIndex) => {
   })
 })
 
-function positionToCoordinate(position: Position) {
+function positionCenter(position: Position): Point {
   const center = getCenter(allHexes[position.row][position.column])
   return {
     x: center.x - hexHalfWidth,
@@ -2327,7 +2329,7 @@ function positionToCoordinate(position: Position) {
 const flingCoefficient = 20
 const walkingCoefficient = 7
 
-function normalizedPosition(targetCoordinate: Point, currentCoordinate: Point) {
+function normalizedVector(currentCoordinate: Point, targetCoordinate: Point) {
   const xDiff = targetCoordinate.x - currentCoordinate.x
   const yDiff = targetCoordinate.y - currentCoordinate.y
   const coefficient = Math.sqrt(Math.pow(xDiff, 2) + Math.pow(yDiff, 2))
@@ -2344,9 +2346,9 @@ function moveSelectedStack(action: Action, target: Position): Promise<void> {
     return Promise.resolve()
   }
   const stackHex = _hex
-  const targetCoordinate = positionToCoordinate(target)
-  const currentCoordinate = positionToCoordinate(previous)
-  const {x, y} = normalizedPosition(targetCoordinate, currentCoordinate)
+  const targetCoordinate = positionCenter(target)
+  const currentCoordinate = positionCenter(previous)
+  const {x, y} = normalizedVector(currentCoordinate, targetCoordinate)
   const path: Point[] = []
   const items = pathBetween({start: previous, end: target})
   for (let i = 1; i < items.length - 1; i++) {
@@ -2355,7 +2357,7 @@ function moveSelectedStack(action: Action, target: Position): Promise<void> {
     item.x -= hexHalfWidth
     path.push(item)
   }
-  path.push(positionToCoordinate(items[items.length - 1]))
+  path.push(positionCenter(items[items.length - 1]))
   stackHex.moving = {
     action,
     target: targetCoordinate,
@@ -2529,27 +2531,55 @@ function selectedType(): Stack["type"] {
   return selected().type
 }
 
-interface AnimationStruct {
+interface OnceAnimation {
   duration: number
   frameCount: number
   frame: number
+  type: "once"
   timer?: number
   runout?: boolean
 }
 
+type AnimationStruct = OnceAnimation | {
+  duration: number
+  frameCount: number
+  frame: number
+  type: "repeating"
+  timer?: number
+}
+
 function onAnimationTick(animation: AnimationStruct, timestamp: number) {
-  if (animation.runout) {
-    return
-  }
   if (!animation.timer) animation.timer = timestamp
   if (!animation.frame) animation.frame = 0
-  const delta = timestamp - animation.timer
-  if (delta >= animation.duration) {
-    animation.frame = animation.frame + 1
-    animation.timer = timestamp
-  }
-  if (animation.frame >= animation.frameCount) {
-    animation.runout = true
+  switch (animation.type) {
+    case "repeating": {
+      const delta = timestamp - animation.timer
+      if (delta >= animation.duration) {
+        animation.frame = animation.frame + 1
+        animation.timer = timestamp
+      }
+      if (animation.frame >= animation.frameCount) {
+        animation.frame = 0
+      }
+      return
+    }
+    case "once": {
+      if (animation.runout) {
+        return
+      }
+      const delta = timestamp - animation.timer
+      if (delta >= animation.duration) {
+        animation.frame = animation.frame + 1
+        animation.timer = timestamp
+      }
+      if (animation.frame >= animation.frameCount) {
+        animation.runout = true
+      }
+      return
+    }
+    default: {
+      never(animation)
+    }
   }
 }
 
@@ -2594,10 +2624,20 @@ async function drawAnimation({struct, draw}: {
     function animate(timestamp: number) {
       clearRect(animations)
       onAnimationTick(struct, timestamp)
-      if (struct.runout) {
-        inAnimation = false
-        resolve()
-        return
+      switch (struct.type) {
+        case "repeating":
+          break;
+        case "once": {
+          if (struct.runout) {
+            break
+          }
+          inAnimation = false
+          resolve()
+          return
+        }
+        default: {
+          never(struct)
+        }
       }
       draw()
       requestAnimationFrame(animate)
@@ -2716,6 +2756,56 @@ function meteorShowerAvailableHexes(position: Position): Hex[] {
   return positionsInRadius({position, radius: 1})
 }
 
+const arrowCoefficient = 25
+function drawAttackSpell({spell, from, to}: {spell: "arrow" | "lightning", from: Point, to: Point}): Promise<void> {
+  const current = {...from}
+  const vector = normalizedVector(from, to)
+  const x = vector.x * arrowCoefficient
+  const y = vector.y * arrowCoefficient
+  switch (spell) {
+    case "arrow": {
+      const sprite = arrowSprite
+      const struct: AnimationStruct = {duration: 60, frameCount: sprite.count, frame: 0, type: "repeating"}
+      inAnimation = true
+      return new Promise(res => {
+        function animate(timestamp: number) {
+          clearRect(animations)
+          onAnimationTick(struct, timestamp)
+          current.x += x
+          current.y += y
+          animations.drawImage(
+            sprite.image,
+            // xOffset + frame * xOffset + frame * frameWidth,
+            struct.frame * sprite.width,
+            0,
+            sprite.width,
+            sprite.height,
+            current.x,
+            current.y,
+            sprite.width,
+            sprite.height
+          )
+          if (nearlyEqual(current.x, to.x, arrowCoefficient) && nearlyEqual(current.y, to.y, arrowCoefficient)) {
+            inAnimation = false
+            clearRect(animations)
+            return res()
+          }
+          requestAnimationFrame(animate)
+        }
+        requestAnimationFrame(animate)
+      })
+    }
+    case "lightning":
+      return Promise.resolve()
+    default:
+      never(spell)
+  }
+}
+
+function downPoint(point: Point, value: number) {
+  return {...point, x: point.x - value}
+}
+
 async function doSpellOnPosition(action: SpellingAction) {
   const {spell, position} = action
   const stack = stackAtPosition(position)
@@ -2737,7 +2827,7 @@ async function doSpellOnPosition(action: SpellingAction) {
       })
     })
     const sprite = meteorsSprite
-    const struct: AnimationStruct = {duration: 50, frameCount: sprite.count, frame: 0}
+    const struct: AnimationStruct = {duration: 50, frameCount: sprite.count, frame: 0, type: "once"}
     const point = positionToPoint(position)
     const addWidth = hexWidth * 2
     const addHeight = hexHeight * 2
@@ -2774,6 +2864,7 @@ async function doSpellOnPosition(action: SpellingAction) {
       if (!target) {
         return
       }
+      await drawAttackSpell({spell, from: allyHeroPoint, to: downPoint(positionToPoint(position), hexHeight / 2)})
       await processActions(magicAttack({
         receiver: enemy,
         attacker: currentSide(),
@@ -2837,7 +2928,7 @@ async function doSpellOnPosition(action: SpellingAction) {
         kind: {
           type: "forceField",
           state: "appearing",
-          animation: {duration: forceFieldDuration, frameCount: forceFieldAppearance.count, frame: 0},
+          animation: {duration: forceFieldDuration, frameCount: forceFieldAppearance.count, frame: 0, type: "once"},
         },
       })
       break
@@ -2915,7 +3006,7 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
 
         const points = stackPoints(targets)
         const sprite = deathRippleSprite
-        const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+        const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
         await drawAnimation({
           struct,
           draw() {
@@ -3087,7 +3178,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "morale": {
       const sprite = moraleSprite
-      const struct: AnimationStruct = {duration: 60, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 60, frameCount: sprite.count, frame: 0, type: "once"}
       const position = positionToPoint(positionOf(action.stack))
 
       return drawAnimation({
@@ -3144,7 +3235,7 @@ async function internalDoAction(action: Action): Promise<void> {
         return
       }
       const sprite = freezingSprite
-      const struct: AnimationStruct = {duration: 50, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 50, frameCount: sprite.count, frame: 0, type: "once"}
       const point = positionToPoint(position)
 
       return drawAnimation({
@@ -3185,7 +3276,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "resistance": {
       const sprite = resistanceSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
 
       return drawAnimation({
         struct,
@@ -3213,7 +3304,7 @@ async function internalDoAction(action: Action): Promise<void> {
       return
     case "bless": {
       const sprite = blessSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const positions = stackPoints(action.targets)
 
       return drawAnimation({
@@ -3236,9 +3327,12 @@ async function internalDoAction(action: Action): Promise<void> {
         }
       })
     }
+    case "arrow": {
+      return
+    }
     case "slow": {
       const sprite = slowSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const positions = stackPoints(action.targets)
 
       return drawAnimation({
@@ -3264,7 +3358,7 @@ async function internalDoAction(action: Action): Promise<void> {
     case "frostRing": {
       const sprite = frostRingSprite
       const {point} = action
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
 
       await drawAnimation({
         struct,
@@ -3294,7 +3388,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "hast": {
       const sprite = hastSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const positions = stackPoints(action.targets)
 
       return drawAnimation({
@@ -3360,7 +3454,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "airShield": {
       const sprite = shieldSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const positions = stackPoints(action.targets)
 
       return drawAnimation({
@@ -3407,7 +3501,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "hypnotize": {
       const sprite = hypnotizeSprite
-      const struct: AnimationStruct = {duration: 60, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 60, frameCount: sprite.count, frame: 0, type: "once"}
       const position = positionToPoint(positionOf(action.target))
 
       return drawAnimation({
@@ -3430,7 +3524,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "antiMagic": {
       const sprite = antiMagicSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const position = positionToPoint(positionOf(action.target))
       const heightDiff = hexHeight * .3
       const widthDiff = hexWidth * .3
@@ -3455,7 +3549,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "forgetfulness": {
       const sprite = forgetfulnessSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const position = positionToPoint(positionOf(action.target))
       const heightDiff = hexHeight * .6
       const widthDiff = hexWidth * .6
@@ -3493,7 +3587,7 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "berserk": {
       const sprite = berserkSprite
-      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0}
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const position = positionToPoint(positionOf(action.target))
 
       return drawAnimation({
@@ -3872,49 +3966,6 @@ function forceMove(hex: Hex) {
   }
 }
 
-const freezingTime = 1000
-const lineCount = 5
-
-function animateFreeze({hex, row, column}: Position & { hex: Hex }, onFinished: () => void) {
-  const stackHex = stackHexFrom(hex)
-  if (!stackHex) {
-    return onFinished();
-  }
-  const freeze = stackHex.freezing
-  if (!freeze) {
-    onFinished()
-    return inAnimation = false
-  }
-  inAnimation = true
-  if (freeze.total >= freezingTime) {
-    clearRect(animations)
-    stackHex.freezing = undefined
-    inAnimation = false
-    onFinished()
-    return
-  }
-  const diff = Date.now() - freeze.total - freeze.startMs
-  freeze.diff += diff
-  freeze.total += diff
-  if (freeze.diff < 50) {
-    return
-  }
-  freeze.diff = 0
-  const lineLength = (freeze.total / freezingTime) * (hexSideLength * 1.5)
-  const offset = hexWidth / (lineCount + 1)
-  for (let i = 0; i < lineCount; i++) {
-    const args = {
-      ctx: animations,
-      x0: rowX(row, column) + offset * (i + 1),
-      y0: rowY(row) - hexHeight / 2,
-      length: lineLength,
-      angelDeg: 90,
-      strokeStyle: "#6a6ded",
-    }
-    plotLineAtAngle(args)
-  }
-}
-
 function drawArrowAnimation(from: Point, to: Point, onComplete: () => void) {
   inAnimation = true
   clearRect(animations)
@@ -4047,6 +4098,10 @@ function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<void
   }))
 }
 
+function onFlyMoveTick() {
+
+}
+
 function move(hex: Hex): Promise<void> | void {
   const stackHex = stackHexFrom(hex)
   if (!stackHex) {
@@ -4083,7 +4138,7 @@ function move(hex: Hex): Promise<void> | void {
     inAnimation = false
     return
   }
-  const {x, y} = normalizedPosition(next, current)
+  const {x, y} = normalizedVector(current, next)
   current.x += x * walkingCoefficient
   current.y += y * walkingCoefficient
   drawStackInfo({
@@ -4152,7 +4207,7 @@ function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, 
 
     if (struct.runout) {
       hex.state = "fires"
-      hex.animation = {duration: fireWallDuration, frameCount: fireWallDisappearSprite.count, frame: 0}
+      hex.animation = {duration: fireWallDuration, frameCount: fireWallDisappearSprite.count, frame: 0, type: "once"}
       return
     }
 
@@ -4259,7 +4314,7 @@ function drawElements(timestamp: number) {
 
               if (struct.runout) {
                 kind.state = "exists"
-                kind.animation = {duration: forceFieldDuration, frameCount: forceFieldExists.count, frame: 0}
+                kind.animation = {duration: forceFieldDuration, frameCount: forceFieldExists.count, frame: 0, type: "once"}
                 return
               }
 
