@@ -64,6 +64,7 @@ type Effect =
   | { type: "airShield", duration: number, value: number }
 
 let __id = 0
+
 function newId() {
   return __id += 1
 }
@@ -1848,7 +1849,7 @@ function stackHexFor({excludes, attacker}: TargetHexPositionsForArgs): StackHexF
 
 type StackHexFor = (Position & { type: "attackable", stack: Stack })
 
-function positionsInRadius({position, radius}: {position: Position, radius: number}): Hex[] {
+function positionsInRadius({position, radius}: { position: Position, radius: number }): Hex[] {
   const {row, column} = position
   const rows = grid.length
   const cols = grid[0].length
@@ -2226,7 +2227,9 @@ function imageOf(name: string) {
     window.__allImages.map(img =>
       img.complete
         ? Promise.resolve()
-        : new Promise(res => { img.onload = res; })
+        : new Promise(res => {
+          img.onload = res;
+        })
     )
   );
 
@@ -2675,7 +2678,7 @@ function onTurnFinishing(): Action {
   return {type: "morale", stack: stack}
 }
 
-function canTakeSpell({stack, spell}: {stack: Stack, spell: Spell}): boolean {
+function canTakeSpell({stack, spell}: { stack: Stack, spell: Spell }): boolean {
   function can(stack: Stack): boolean {
     switch (stack.type) {
       case "airElement":
@@ -2706,6 +2709,7 @@ function canTakeSpell({stack, spell}: {stack: Stack, spell: Spell}): boolean {
         never(stack)
     }
   }
+
   return can(stack) && !effectIn(toRealStack(stack), "antiMagic")
 }
 
@@ -2757,7 +2761,8 @@ function meteorShowerAvailableHexes(position: Position): Hex[] {
 }
 
 const arrowCoefficient = 25
-function drawAttackSpell({spell, from, to}: {spell: "arrow" | "lightning", from: Point, to: Point}): Promise<void> {
+
+function drawAttackSpell({spell, from, to}: { spell: "arrow" | "lightning", from: Point, to: Point }): Promise<void> {
   const current = {...from}
   const vector = normalizedVector(from, to)
   const x = vector.x * arrowCoefficient
@@ -2792,6 +2797,7 @@ function drawAttackSpell({spell, from, to}: {spell: "arrow" | "lightning", from:
           }
           requestAnimationFrame(animate)
         }
+
         requestAnimationFrame(animate)
       })
     }
@@ -3048,6 +3054,7 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
 //@ts-expect-error
 window.__actionExecuted = false
 let entered = false
+
 async function doAction(action: Action): Promise<void> {
   const thisEntered = entered
   if (!entered) {
@@ -4098,8 +4105,8 @@ function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<void
   }))
 }
 
-function onFlyMoveTick() {
-
+function isFoeStack(stack: Stack): boolean {
+  return foe().army.includes(stack)
 }
 
 function move(hex: Hex): Promise<void> | void {
@@ -4124,7 +4131,9 @@ function move(hex: Hex): Promise<void> | void {
       x: current.x,
       y: current.y,
       fillStyle: "red",
-      stack: stackHex.stack
+      stack: stackHex.stack,
+      flip: isFoeStack(stackHex.stack),
+      isDead: false,
     })
     if (nearlyEqual(current.x, target.x) && nearlyEqual(current.y, target.y)) {
       forceMove(hex)
@@ -4145,9 +4154,10 @@ function move(hex: Hex): Promise<void> | void {
     ctx: units,
     x: current.x,
     y: current.y,
-    flip: foe().army.includes(stackHex.stack),
+    flip: isFoeStack(stackHex.stack),
     fillStyle: stackHex.stack === selected() ? "red" : undefined,
-    stack: stackHex.stack
+    stack: stackHex.stack,
+    isDead: false,
   })
   if (!nearlyEqual(current.x, next.x) || !nearlyEqual(current.y, next.y)) {
     return
@@ -4176,8 +4186,9 @@ function drawStack(hex: StackHex, x: number, y: number) {
     x,
     y,
     fillStyle: hex.stack === selected() && !inAnimation ? "red" : "#000",
-    flip: foe().army.includes(hex.stack),
-    stack: hex.stack
+    stack: hex.stack,
+    flip: isFoeStack(hex.stack),
+    isDead: false,
   })
 }
 
@@ -4314,7 +4325,12 @@ function drawElements(timestamp: number) {
 
               if (struct.runout) {
                 kind.state = "exists"
-                kind.animation = {duration: forceFieldDuration, frameCount: forceFieldExists.count, frame: 0, type: "once"}
+                kind.animation = {
+                  duration: forceFieldDuration,
+                  frameCount: forceFieldExists.count,
+                  frame: 0,
+                  type: "once"
+                }
                 return
               }
 
@@ -4399,19 +4415,14 @@ function drawElements(timestamp: number) {
   clearRect(deadUnits)
   hexesOfDead.forEach(item => {
     const {row, column} = item
-    const hex = hexAtRowColumn(row, column);
-    if (!hex) {
-      return;
-    }
-    if (hex.type !== "stack") return
-    const x = columnHexX(row, column)
-    const y = rowY(row)
     drawStackInfo({
       ctx: deadUnits,
-      x,
-      y,
+      x: columnHexX(row, column),
+      y: rowY(row),
       fillStyle: 'gray',
-      stack: hex.stack
+      flip: item.owner === foe(),
+      stack: item.stack,
+      isDead: true,
     })
   })
 }
@@ -4419,13 +4430,17 @@ function drawElements(timestamp: number) {
 interface DrawStackInfoArgs {
   stack: Stack
   ctx: CanvasRenderingContext2D
-  fillStyle?: string
-  flip?: boolean
+  fillStyle: string | undefined
+  flip: boolean
   x: number
   y: number
+  isDead: boolean
 }
 
-function drawImage(ctx: CanvasRenderingContext2D, image: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number, cloned: boolean) {
+function drawImage(ctx: CanvasRenderingContext2D, image: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number, {
+  cloned,
+  isDead
+}: { cloned: boolean, isDead: boolean }) {
   try {
     ctx.drawImage(
       image,
@@ -4448,9 +4463,16 @@ function drawImage(ctx: CanvasRenderingContext2D, image: CanvasImageSource, sx: 
     ctx.fillRect(dx, dy, dw, dh);
     ctx.globalCompositeOperation = old
   }
+  if (isDead) {
+    const old = ctx.globalCompositeOperation
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = "rgba(149,149,199,0.6)"
+    ctx.fillRect(dx, dy, dw, dh);
+    ctx.globalCompositeOperation = old
+  }
 }
 
-function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
+function drawStackInfo({stack, flip, ctx, fillStyle, isDead, x, y}: DrawStackInfoArgs) {
   const originStack = stack
   stack = toRealStack(stack)
   const drawX = x
@@ -4465,7 +4487,7 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
     x = 0
   }
 
-  const cloned = originStack.type === "clone";
+  const args = {cloned: originStack.type === "clone", isDead}
   switch (stack.type) {
     case "dragon": {
       const width = dragonSprite.width
@@ -4481,7 +4503,7 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
         drawY - sprite.height * .4,
         width * 1.3,
         sprite.height * 1.3,
-        cloned
+        args
       )
       break
     }
@@ -4498,7 +4520,7 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
         drawY,
         width,
         ballistaSprite.height,
-        cloned
+        args
       )
       break
     }
@@ -4516,7 +4538,7 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
         drawY,
         width,
         sprite.height,
-        cloned
+        args
       )
       break
     }
@@ -4535,7 +4557,7 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
         drawY - addHeight,
         width + addWidth,
         archerSprite.height + addHeight,
-        cloned
+        args
       )
       break
     }
@@ -4552,7 +4574,7 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
         drawY - 10,
         width,
         dendroidSprite.height,
-        cloned
+        args
       )
       break
     }
@@ -4569,7 +4591,7 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
         drawY - 10,
         width,
         angelSprite.height,
-        cloned
+        args
       )
       break
     }
@@ -4877,6 +4899,8 @@ function drawBattlefield(timestamp: number) {
       y: allyBallistaPoint.y,
       fillStyle: "red",
       stack: allyBallista,
+      flip: false,
+      isDead: false,
     })
   }
   if (foeBallista) {
@@ -4887,6 +4911,7 @@ function drawBattlefield(timestamp: number) {
       flip: true,
       fillStyle: "red",
       stack: foeBallista,
+      isDead: false,
     })
   }
   if (allyAidTent) {
@@ -4896,6 +4921,8 @@ function drawBattlefield(timestamp: number) {
       y: allyAidTentPoint.y,
       fillStyle: "red",
       stack: allyAidTent,
+      flip: false,
+      isDead: false,
     })
   }
   if (foeAidTent) {
@@ -4906,6 +4933,7 @@ function drawBattlefield(timestamp: number) {
       fillStyle: "red",
       stack: foeAidTent,
       flip: true,
+      isDead: false,
     })
   }
   // get rid of it
