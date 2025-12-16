@@ -2628,7 +2628,7 @@ async function drawAnimation({struct, draw}: {
         case "repeating":
           break;
         case "once": {
-          if (struct.runout) {
+          if (!struct.runout) {
             break
           }
           inAnimation = false
