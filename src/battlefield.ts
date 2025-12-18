@@ -1440,7 +1440,7 @@ function makeAlly(): Side {
       {type: "air", level: 3},
     ],
     army: [
-      stackOf("dendroid", 15),
+      stackOf("dendroid", 25),
     ],
     spells: [
       "arrow",
@@ -1487,6 +1487,7 @@ const forceFieldExists = {image: forceFieldImage, width: 61, height: 136, countO
 const forceFieldDisappearance = {image: forceFieldImage, width: 61, height: 136, countOffset: 11, count: 4}
 const forceFieldDuration = 60
 const hastSprite = {image: imageOf("hast"), width: 113, height: 106, count: 15}
+const quicksandDuration = 50;
 const appearingQuicksandSprite = {image: imageOf("appearingQuicksand"), width: 47, height: 41, count: 4}
 const appearedQuicksandSprite = {image: imageOf("appearedQuicksand"), width: 47, height: 41, count: 6}
 const disappearingQuicksandSprite = {image: imageOf("disappearingQuicksand"), width: 47, height: 41, count: 4}
@@ -1589,6 +1590,7 @@ for (let i = 0; i <= lastRowIndex; i++) {
 
 // place army
 globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]});
+globalHexes.push(quicksandHex({row: 0, column: 1}));
 // globalHexes.push({ type: "stack", row: 2, column: 0, stack: ally().army[1] });
 // globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
 // globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
@@ -1851,19 +1853,18 @@ function fireWallHex(position: Position): FireWallHex {
     ...position,
     type: "fireWall",
     state: "appearing",
-    roundsLeft: 1,
+    roundsLeft: 3,
     animation: {duration: fireWallDuration, frameCount: fireWallAppearSprite.count, frame: 0, type: "once"},
   }
 }
 
-const quicksandDuration = 50;
 function quicksandHex(position: Position): QuicksandHex {
   return {
     row: position.row,
     column: position.column,
     type: "quicksand",
     state: "appearing",
-    roundsLeft: 1,
+    roundsLeft: 3,
     animation: {
       duration: quicksandDuration,
       frameCount: appearingQuicksandSprite.count,
@@ -3687,7 +3688,7 @@ async function internalDoAction(action: Action): Promise<void> {
       if (!hex || hex.type !== "stack") {
         return
       }
-      removeHexAt(stackPosition.row, stackPosition.column)
+      removeHex(stackPosition)
       globalHexes.push(stackHex(hex.stack, targetPosition.row, targetPosition.column))
       return
     }
@@ -4020,10 +4021,8 @@ function pathBetween({start, end}: PathBetweenArgs): Position[] {
             n.row >= 0 &&
             n.row <= lastRowIndex &&
             n.column >= 0 &&
-            n.column <= lastColumnIndex && (
-              type === "empty" ||
-              type === "fireWall"
-            ) || samePositions(n, end)
+            n.column <= lastColumnIndex && canStepOn(type) ||
+            samePositions(n, end)
           )
         }
       )
@@ -4055,7 +4054,8 @@ function forceMove(hex: Hex) {
     return
   }
   const targetPosition = stackHex.moving.targetPosition
-  const index = globalHexes.findIndex(i => i === hex)
+  const _hex = hexAt(hex)
+  const index = globalHexes.findIndex(i => i === _hex)
   if (index === -1) {
     return
   }
@@ -4064,11 +4064,15 @@ function forceMove(hex: Hex) {
   if (!old) {
     return
   }
+  stackHex.row = targetPosition.row
+  stackHex.column = targetPosition.column
   stackHex.moving = undefined
   switch (old.type) {
     case "fireWall":
+      removeHex(old)
       return globalHexes.push({type: "stackFireWall", stackHex, fireWall: old, ...targetPosition})
     case "quicksand":
+      removeHex(old)
       return globalHexes.push({type: "stackQuicksand", stackHex, quicksand: old, ...targetPosition})
     case "stackQuicksand":
     case "empty":
@@ -4200,24 +4204,25 @@ function canFly(type: StackType) {
   }
 }
 
-function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<void> {
+async function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<{stopped: boolean}> {
   switch (hex.type) {
     case "empty":
     case "obstacle":
     case "stack":
     case "stackQuicksand":
-      return Promise.resolve()
+      return Promise.resolve({stopped: false})
     case "fireWall":
     case "stackFireWall": {
-      return processActions(magicAttack({
+      await processActions(magicAttack({
         spell: "fireWall",
         target: stack,
         receiver: stackOwner(stack),
         attacker: stackEnemy(stack),
       }))
+      return Promise.resolve({stopped: false})
     }
     case "quicksand":
-      return Promise.resolve()
+      return Promise.resolve({stopped: true})
     default: {
       never(hex)
     }
@@ -4228,7 +4233,7 @@ function isFoeStack(stack: Stack): boolean {
   return foe().army.includes(stack)
 }
 
-function move(hex: Hex): Promise<void> | void {
+async function move(hex: Hex): Promise<void> {
   const stackHex = stackHexFrom(hex)
   if (!stackHex) {
     return
@@ -4276,18 +4281,24 @@ function move(hex: Hex): Promise<void> | void {
     fillStyle: stackHex.stack === selected() ? "red" : undefined,
     stack: stackHex.stack,
   })
-  if (!nearlyEqual(current.x, next.x) || !nearlyEqual(current.y, next.y)) {
+  if (!nearlyEqual(current.x, next.x, hexWidth / 10) || !nearlyEqual(current.y, next.y, hexHeight / 10)) {
     return
   }
   const point = stackHex.moving?.path.splice(0, 1)[0]
   if (!point) {
     return
   }
-  const targetHex = hexAtPoint({...point, x: point.x})?.hex
+  const targetHex = hexAtPoint(point)?.hex
   if (!target || !targetHex) {
     return
   }
-  return stackSteppingOn({hex: targetHex, stack: stackHex.stack})
+  const res = await stackSteppingOn({hex: targetHex, stack: stackHex.stack})
+  if (!res.stopped) {
+    return
+  }
+  moving.targetPosition = {row: targetHex.row, column: targetHex.column}
+  inAnimation = false
+  forceMove(hex)
 }
 
 let inAnimation = false
@@ -4322,6 +4333,10 @@ function removeHexAt(row: number, column: number, replace?: Hex) {
   } else {
     globalHexes.splice(index, 1)
   }
+}
+
+function removeHex(hex: Position) {
+  removeHexAt(hex.row, hex.column)
 }
 
 function drawQuicksand(hex: QuicksandHex, x: number, y: number, row: number, column: number, timestamp: number) {
