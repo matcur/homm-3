@@ -579,7 +579,7 @@ function nextRound() {
   onTurnStarted()
 }
 
-function removeExpiredHex(row: number, column: number, roundsHex: {roundsLeft: number}, replace?: Hex) {
+function removeExpiredHex(row: number, column: number, roundsHex: { roundsLeft: number }, replace?: Hex) {
   roundsHex.roundsLeft--
   if (roundsHex.roundsLeft > 0) {
     return
@@ -752,7 +752,7 @@ async function onTurnStarted() {
       }
       const closest = closestStack({from: current, excludes: side.army})
       if (!closest) {
-        return
+        throw new Error("Can't find target")
       }
       return chase(closest)
     }
@@ -1598,7 +1598,6 @@ globalHexes.push({type: "stack", row: 0, column: lastColumnIndex, stack: foe().a
 globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
 // globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
 // globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
-
 
 
 // endregion
@@ -3053,12 +3052,12 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
           const placed: Position[] = []
           let attempts = 0
           const maxAttempts = 100
-          
+
           while (placed.length < count && attempts < maxAttempts) {
             attempts++
             const row = Math.floor(random(50000 * attempts) * lastRowIndex)
             const column = Math.floor(random(50000 * attempts) * lastColumnIndex)
-            
+
             const existingHex = hexAtRowColumn(row, column)
             if (existingHex && existingHex.type !== "empty") {
               continue
@@ -3069,11 +3068,12 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
             if (column < 2 || column > lastColumnIndex - 2) {
               continue
             }
-            
+
             globalHexes.push(quicksandHex({row, column}))
             placed.push({row, column})
           }
         }
+
         placeRandomQuicksand(3)
         ensureAdded(game.heroesCastedSpell, currentSide().hero)
         return
@@ -4053,36 +4053,36 @@ function forceMove(hex: Hex) {
   if (!stackHex || !stackHex.moving) {
     return
   }
-  const targetPosition = stackHex.moving.targetPosition
-  const _hex = hexAt(hex)
-  const index = globalHexes.findIndex(i => i === _hex)
-  if (index === -1) {
+  const {targetPosition} = stackHex.moving
+  const oldTarget = hexAt(targetPosition)
+  if (oldTarget?.type !== "empty" && globalHexes.findIndex(i => i === oldTarget) === -1 || !oldTarget) {
     return
   }
-  globalHexes.splice(index, 1)
-  const old = hexAt(targetPosition)
-  if (!old) {
-    return
-  }
+  (() => {
+    stackHex.moving = undefined
+    switch (oldTarget.type) {
+      case "fireWall":
+        removeHex(oldTarget)
+        return globalHexes.push({type: "stackFireWall", stackHex, fireWall: oldTarget, ...targetPosition})
+      case "quicksand":
+        removeHex(oldTarget)
+        return globalHexes.push({type: "stackQuicksand", stackHex, quicksand: oldTarget, ...targetPosition})
+      case "stackQuicksand":
+        removeHex(oldTarget)
+        return globalHexes.push(oldTarget.quicksand)
+      case "stackFireWall":
+        removeHex(oldTarget)
+        return globalHexes.push(oldTarget.fireWall)
+      case "empty":
+      case "obstacle":
+      case "stack":
+        return globalHexes.push({...stackHex, ...targetPosition})
+      default:
+        never(oldTarget)
+    }
+  })()
   stackHex.row = targetPosition.row
   stackHex.column = targetPosition.column
-  stackHex.moving = undefined
-  switch (old.type) {
-    case "fireWall":
-      removeHex(old)
-      return globalHexes.push({type: "stackFireWall", stackHex, fireWall: old, ...targetPosition})
-    case "quicksand":
-      removeHex(old)
-      return globalHexes.push({type: "stackQuicksand", stackHex, quicksand: old, ...targetPosition})
-    case "stackQuicksand":
-    case "empty":
-    case "obstacle":
-    case "stack":
-    case "stackFireWall":
-      return globalHexes.push({...stackHex, ...targetPosition})
-    default:
-      never(old)
-  }
 }
 
 function drawArrowAnimation(from: Point, to: Point, onComplete: () => void) {
@@ -4204,7 +4204,7 @@ function canFly(type: StackType) {
   }
 }
 
-async function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<{stopped: boolean}> {
+async function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<{ stopped: boolean }> {
   switch (hex.type) {
     case "empty":
     case "obstacle":
@@ -4341,6 +4341,7 @@ function removeHex(hex: Position) {
 
 function drawQuicksand(hex: QuicksandHex, x: number, y: number, row: number, column: number, timestamp: number) {
   const struct = hex.animation
+
   function draw(sprite: typeof appearedQuicksandSprite) {
     const quicksandY = y - hexHeight * .8
     const xOffset = hexWidth * .1;
@@ -4357,11 +4358,17 @@ function drawQuicksand(hex: QuicksandHex, x: number, y: number, row: number, col
       hexHeight - yOffset,
     )
   }
+
   if (hex.state === "appearing" && struct.type === "once") {
     onAnimationTick(struct, timestamp)
     if (struct.runout) {
       hex.state = "appeared"
-      hex.animation = {duration: quicksandDuration * 2, frameCount: appearingQuicksandSprite.count, frame: 0, type: "repeating"}
+      hex.animation = {
+        duration: quicksandDuration * 2,
+        frameCount: appearingQuicksandSprite.count,
+        frame: 0,
+        type: "repeating"
+      }
       return
     }
     draw(appearingQuicksandSprite)
@@ -4404,7 +4411,12 @@ function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, 
 
     if (struct.runout) {
       hex.state = "fires"
-      hex.animation = {duration: fireWallDuration, frameCount: fireWallDisappearSprite.count, frame: 0, type: "repeating"}
+      hex.animation = {
+        duration: fireWallDuration,
+        frameCount: fireWallDisappearSprite.count,
+        frame: 0,
+        type: "repeating"
+      }
       return
     }
 
@@ -4624,7 +4636,9 @@ interface DrawStackInfoArgs {
   y: number
 }
 
-function drawImage(ctx: CanvasRenderingContext2D, image: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number, {cloned}: { cloned: boolean }) {
+function drawImage(ctx: CanvasRenderingContext2D, image: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number, {cloned}: {
+  cloned: boolean
+}) {
   try {
     ctx.drawImage(
       image,
