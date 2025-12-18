@@ -233,7 +233,7 @@ const hates: Partial<Record<StackType, StackType>> = {
   devil: "angel",
 }
 
-function levelToPercent(level: number) {
+function levelToPercent(level: number): number {
   if (level === 1) {
     return .25
   }
@@ -254,7 +254,7 @@ function attackOf(args: SingleAttackArgs): number {
   }
 
   function forceCalculate(min: number, max: number): number {
-    return Math.round(min + random(game.seed) * (max - min))
+    return Math.round(min + random() * (max - min))
   }
 
   function calculate(min: number, max: number): number {
@@ -385,6 +385,7 @@ type Spell =
   | MagicEffectSpell
   | "forceField"
   | "teleport"
+  | "quicksand"
   | "summonAirElement"
   | "summonFireElement"
   | "summonEarthElement"
@@ -403,6 +404,7 @@ const spellSchool: Record<Spell, MagicSchool> = {
   hypnotize: "earth",
   forceField: "earth",
   fireWall: "fire",
+  quicksand: "earth",
   airShield: "air",
   frostRing: "water",
   clone: "water",
@@ -531,7 +533,7 @@ function nextRound() {
           effect.duration -= 1
           if (effect.duration <= 0) {
             stack = toRealStack(stack)
-            stack.effects.splice(stack.effects.indexOf(effect), 1)
+            removeFromArray(stack.effects, effect)
           }
           return;
         }
@@ -539,6 +541,23 @@ function nextRound() {
           return
       }
     })
+  });
+  [...globalHexes].forEach((hex) => {
+    switch (hex.type) {
+      case "empty":
+      case "obstacle":
+      case "stack":
+        return
+      case "fireWall":
+      case "quicksand":
+        return removeExpiredHex(hex.row, hex.column, hex)
+      case "stackFireWall":
+        return removeExpiredHex(hex.row, hex.column, hex.fireWall, hex.stackHex)
+      case "stackQuicksand":
+        return removeExpiredHex(hex.row, hex.column, hex.quicksand, hex.stackHex)
+      default:
+        never(hex)
+    }
   })
 
   const selected = nextInQueue()
@@ -558,6 +577,14 @@ function nextRound() {
     foe: game.foe,
   }
   onTurnStarted()
+}
+
+function removeExpiredHex(row: number, column: number, roundsHex: {roundsLeft: number}, replace?: Hex) {
+  roundsHex.roundsLeft--
+  if (roundsHex.roundsLeft > 0) {
+    return
+  }
+  return removeHexAt(row, column, replace)
 }
 
 function nextInQueue() {
@@ -668,14 +695,18 @@ async function chase(target: Stack): Promise<"attacked" | "chasing"> {
 
 async function onTurnStarted() {
   const current = selected();
+  const type: StackType = current.type;
   if (currentSide().skills.find(i => i.type === "machine")) {
-    if (selectedType() === "aidTent" && !firstDamagedFriend()) {
+    if (type === "aidTent" && !firstDamagedFriend()) {
       doAction({type: "nextTurn"})
+      return
+    }
+    if (type === "aidTent" || type === "ballista") {
       return
     }
   }
 
-  if (effectIn(toRealStack(current), "berserk")) {
+  if (effectIn(current, "berserk")) {
     const target = closestStack({from: current, excludes: [current]})
     if (!target) {
       return
@@ -685,7 +716,7 @@ async function onTurnStarted() {
     }
     return removeEffect({effects: toRealStack(current).effects, removing: "berserk"})
   }
-  switch (selectedType()) {
+  switch (type) {
     case "ballista": {
       const position = positionOf(stackEnemy(current).army[0])
       doAction({
@@ -1343,12 +1374,12 @@ function shouldGetHitBack(stack: Stack) {
 
 // region utils
 
-function random(seed: number) {
+function random(increase = 1) {
   const m = 2 ** 31
   const a = 1103515245
   const c = 12345
-  seed = (a * seed + c) % m
-  return seed / m
+  increaseSeed(increase)
+  return (a * game.seed + c) % m / m
 }
 
 function increaseSeed(value: number) {
@@ -1363,8 +1394,7 @@ function getLucky(probability: number) {
     return false
   }
   // return Math.random() > (1 - probability)
-  game.seed += 1
-  return random(game.seed) > (1 - probability)
+  return random() > (1 - probability)
 }
 
 function levelToProbability(level: number) {
@@ -1415,6 +1445,7 @@ function makeAlly(): Side {
     spells: [
       "arrow",
       "meteorShower",
+      "quicksand",
       "berserk",
       "lightning",
       "deathRipple",
@@ -1456,6 +1487,9 @@ const forceFieldExists = {image: forceFieldImage, width: 61, height: 136, countO
 const forceFieldDisappearance = {image: forceFieldImage, width: 61, height: 136, countOffset: 11, count: 4}
 const forceFieldDuration = 60
 const hastSprite = {image: imageOf("hast"), width: 113, height: 106, count: 15}
+const appearingQuicksandSprite = {image: imageOf("appearingQuicksand"), width: 47, height: 41, count: 4}
+const appearedQuicksandSprite = {image: imageOf("appearedQuicksand"), width: 47, height: 41, count: 6}
+const disappearingQuicksandSprite = {image: imageOf("disappearingQuicksand"), width: 47, height: 41, count: 4}
 const heroesSprite = {image: imageOf("heroes"), width: 150, height: 183, count: 20}
 const berserkSprite = {image: imageOf("berserk"), width: 61, height: 99, count: 12}
 const hypnotizeSprite = {image: imageOf("hypnotize"), width: 99, height: 90, count: 19}
@@ -1537,27 +1571,7 @@ const unitsCanvas = querySelector<HTMLCanvasElement>("canvas.units")
 const units = unitsCanvas.getContext("2d")!
 const defaultSeed = 16
 
-let game: Game = initializedGame();
-
-(() => {
-  const allyLevel = ally().skills.find(i => i.type === "tactic")?.level || 0
-  const foeLevel = foe().skills.find(i => i.type === "tactic")?.level || 0
-  if (allyLevel === foeLevel) {
-    return
-  }
-  endTacticBtn.style.display = "initial"
-  nextStackBtn.style.display = "initial"
-  bookBtn.disabled = true
-  defenceBtn.disabled = true
-  waitedBtn.disabled = true
-
-  game = {
-    ...game,
-    type: "tactic",
-    side: allyLevel > foeLevel ? ally() : foe(),
-    level: Math.abs(allyLevel - foeLevel),
-  }
-})()
+let game: Game = startGame();
 
 let globalHexes: Hex[] = []
 let hexesOfDead: { owner: Side, row: number, column: number, stack: Stack }[] = []
@@ -1582,6 +1596,7 @@ globalHexes.push({type: "stack", row: 0, column: lastColumnIndex, stack: foe().a
 globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
 // globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
 // globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
+
 
 
 // endregion
@@ -1781,7 +1796,18 @@ interface FireWallHex {
   row: number
   column: number
   state: "appearing" | "fires" | "disappearing"
-  animation: OnceAnimation
+  roundsLeft: number
+  animation: AnimationStruct
+  stack?: Stack
+}
+
+interface QuicksandHex {
+  type: "quicksand"
+  row: number
+  column: number
+  state: "appearing" | "appeared" | "disappearing"
+  animation: AnimationStruct
+  roundsLeft: number
   stack?: Stack
 }
 
@@ -1800,7 +1826,15 @@ interface StackFireWallHex {
   column: number
 }
 
-type Hex = ObstacleHex | StackHex | FireWallHex | StackFireWallHex | EmptyHex
+interface StackQuicksandHex {
+  type: "stackQuicksand"
+  stackHex: StackHex
+  quicksand: QuicksandHex
+  row: number
+  column: number
+}
+
+type Hex = ObstacleHex | StackHex | FireWallHex | StackFireWallHex | QuicksandHex | StackQuicksandHex | EmptyHex
 
 const _emptyHexes: { [row_column: string]: EmptyHex } = {}
 
@@ -1817,7 +1851,25 @@ function fireWallHex(position: Position): FireWallHex {
     ...position,
     type: "fireWall",
     state: "appearing",
+    roundsLeft: 1,
     animation: {duration: fireWallDuration, frameCount: fireWallAppearSprite.count, frame: 0, type: "once"},
+  }
+}
+
+const quicksandDuration = 50;
+function quicksandHex(position: Position): QuicksandHex {
+  return {
+    row: position.row,
+    column: position.column,
+    type: "quicksand",
+    state: "appearing",
+    roundsLeft: 1,
+    animation: {
+      duration: quicksandDuration,
+      frameCount: appearingQuicksandSprite.count,
+      frame: 0,
+      type: "once"
+    }
   }
 }
 
@@ -1955,7 +2007,7 @@ interface AvailableHexPositionsFromArgs {
 }
 
 function canStepOn(type: Hex["type"] | undefined) {
-  return type === "empty" || type === "fireWall"
+  return type === "empty" || type === "fireWall" || type === "quicksand"
 }
 
 function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): AvailableHex[] {
@@ -2155,10 +2207,6 @@ function hasAbilityToFire(stack: Stack): boolean {
     default:
       never(type)
   }
-}
-
-function canSelectedFire() {
-
 }
 
 function currentEnemies(): Stack[] {
@@ -2409,6 +2457,7 @@ function hexAtRowColumn(row: number, column: number): Hex | undefined {
     const type = item.type;
     switch (type) {
       case "stackFireWall":
+      case "stackQuicksand":
         if (item.stackHex.row === row && item.stackHex.column === column) {
           return item
         }
@@ -2416,6 +2465,7 @@ function hexAtRowColumn(row: number, column: number): Hex | undefined {
       case "empty":
       case "obstacle":
       case "fireWall":
+      case "quicksand":
         if (item.row === row && item.column === column) {
           return item
         }
@@ -2659,10 +2709,12 @@ function stackHexFrom(hex: Hex | undefined): StackHex | undefined {
     case "obstacle":
     case "empty":
     case "fireWall":
+    case "quicksand":
       return undefined
     case "stack":
       return hex
     case "stackFireWall":
+    case "stackQuicksand":
       return hex.stackHex
     default:
       never(type)
@@ -2710,7 +2762,7 @@ function canTakeSpell({stack, spell}: { stack: Stack, spell: Spell }): boolean {
     }
   }
 
-  return can(stack) && !effectIn(toRealStack(stack), "antiMagic")
+  return can(stack) && !effectIn(stack, "antiMagic")
 }
 
 function summonStack(stack: Stack) {
@@ -2924,6 +2976,12 @@ async function doSpellOnPosition(action: SpellingAction) {
       }
       globalHexes.push(fireWallHex(position))
       break
+    case "quicksand":
+      if (hexAt(position)?.type !== "empty") {
+        return
+      }
+      globalHexes.push(quicksandHex(position))
+      break
     case "forceField":
       if (hexAt(position)?.type !== "empty") {
         return
@@ -2988,6 +3046,37 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
       case "meteorShower":
         game = {...game, type: "gameSpelling", spell}
         return
+      case "quicksand": {
+        // Place 3 random quicksand hexes automatically
+        function placeRandomQuicksand(count: number) {
+          const placed: Position[] = []
+          let attempts = 0
+          const maxAttempts = 100
+          
+          while (placed.length < count && attempts < maxAttempts) {
+            attempts++
+            const row = Math.floor(random(50000 * attempts) * lastRowIndex)
+            const column = Math.floor(random(50000 * attempts) * lastColumnIndex)
+            
+            const existingHex = hexAtRowColumn(row, column)
+            if (existingHex && existingHex.type !== "empty") {
+              continue
+            }
+            if (placed.some(p => p.row === row && p.column === column)) {
+              continue
+            }
+            if (column < 2 || column > lastColumnIndex - 2) {
+              continue
+            }
+            
+            globalHexes.push(quicksandHex({row, column}))
+            placed.push({row, column})
+          }
+        }
+        placeRandomQuicksand(3)
+        ensureAdded(game.heroesCastedSpell, currentSide().hero)
+        return
+      }
       case "forgetfulness":
       case "slow": {
         const caster = currentSide()
@@ -3440,6 +3529,7 @@ async function internalDoAction(action: Action): Promise<void> {
       switch (type) {
         case "obstacle":
         case "stackFireWall":
+        case "stackQuicksand":
         case "stack":
           return
         case "empty":
@@ -3451,6 +3541,15 @@ async function internalDoAction(action: Action): Promise<void> {
             column: hex.column,
             type: "stackFireWall",
             fireWall: hex,
+            stackHex: stackHex(clone, available.row, available.column)
+          })
+          return
+        case "quicksand":
+          globalHexes.push({
+            row: hex.row,
+            column: hex.column,
+            type: "stackQuicksand",
+            quicksand: hex,
             stackHex: stackHex(clone, available.row, available.column)
           })
           return
@@ -3588,7 +3687,7 @@ async function internalDoAction(action: Action): Promise<void> {
       if (!hex || hex.type !== "stack") {
         return
       }
-      removeHex(stackPosition.row, stackPosition.column)
+      removeHexAt(stackPosition.row, stackPosition.column)
       globalHexes.push(stackHex(hex.stack, targetPosition.row, targetPosition.column))
       return
     }
@@ -3966,10 +4065,19 @@ function forceMove(hex: Hex) {
     return
   }
   stackHex.moving = undefined
-  if (old.type === "fireWall") {
-    globalHexes.push({type: "stackFireWall", stackHex, fireWall: old, ...targetPosition})
-  } else {
-    globalHexes.push({...stackHex, ...targetPosition})
+  switch (old.type) {
+    case "fireWall":
+      return globalHexes.push({type: "stackFireWall", stackHex, fireWall: old, ...targetPosition})
+    case "quicksand":
+      return globalHexes.push({type: "stackQuicksand", stackHex, quicksand: old, ...targetPosition})
+    case "stackQuicksand":
+    case "empty":
+    case "obstacle":
+    case "stack":
+    case "stackFireWall":
+      return globalHexes.push({...stackHex, ...targetPosition})
+    default:
+      never(old)
   }
 }
 
@@ -4093,16 +4201,27 @@ function canFly(type: StackType) {
 }
 
 function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<void> {
-  if (hex.type !== "fireWall" && hex.type !== "stackFireWall") {
-    return Promise.resolve()
+  switch (hex.type) {
+    case "empty":
+    case "obstacle":
+    case "stack":
+    case "stackQuicksand":
+      return Promise.resolve()
+    case "fireWall":
+    case "stackFireWall": {
+      return processActions(magicAttack({
+        spell: "fireWall",
+        target: stack,
+        receiver: stackOwner(stack),
+        attacker: stackEnemy(stack),
+      }))
+    }
+    case "quicksand":
+      return Promise.resolve()
+    default: {
+      never(hex)
+    }
   }
-
-  return processActions(magicAttack({
-    spell: "fireWall",
-    target: stack,
-    receiver: stackOwner(stack),
-    attacker: stackEnemy(stack),
-  }))
 }
 
 function isFoeStack(stack: Stack): boolean {
@@ -4193,7 +4312,7 @@ function hexIndex(row: number, column: number) {
   return globalHexes.findIndex(i => i.row === row && i.column === column)
 }
 
-function removeHex(row: number, column: number, replace?: Hex) {
+function removeHexAt(row: number, column: number, replace?: Hex) {
   const index = hexIndex(row, column)
   if (index === -1) {
     return
@@ -4205,17 +4324,72 @@ function removeHex(row: number, column: number, replace?: Hex) {
   }
 }
 
+function drawQuicksand(hex: QuicksandHex, x: number, y: number, row: number, column: number, timestamp: number) {
+  const struct = hex.animation
+  function draw(sprite: typeof appearedQuicksandSprite) {
+    const quicksandY = y - hexHeight * .8
+    const xOffset = hexWidth * .1;
+    const yOffset = hexHeight * .1;
+    units.drawImage(
+      sprite.image,
+      struct.frame * sprite.width,
+      0,
+      sprite.width,
+      sprite.height,
+      x + xOffset,
+      quicksandY + yOffset,
+      hexWidth - xOffset,
+      hexHeight - yOffset,
+    )
+  }
+  if (hex.state === "appearing" && struct.type === "once") {
+    onAnimationTick(struct, timestamp)
+    if (struct.runout) {
+      hex.state = "appeared"
+      hex.animation = {duration: quicksandDuration * 2, frameCount: appearingQuicksandSprite.count, frame: 0, type: "repeating"}
+      return
+    }
+    draw(appearingQuicksandSprite)
+  } else if (hex.state === "appeared") {
+    onAnimationTick(struct, timestamp)
+    draw(appearedQuicksandSprite)
+  } else if (hex.state === "disappearing" && struct.type === "once") {
+    onAnimationTick(struct, timestamp)
+    if (struct.runout) {
+      const hex = hexAtRowColumn(row, column)
+      if (!hex) {
+        return
+      }
+      switch (hex.type) {
+        case "empty":
+        case "obstacle":
+        case "stack":
+        case "fireWall":
+        case "stackFireWall":
+          return
+        case "quicksand":
+          return removeHexAt(row, column)
+        case "stackQuicksand":
+          return removeHexAt(row, column, hex.stackHex)
+        default:
+          never(hex)
+      }
+    }
+    draw(disappearingQuicksandSprite)
+  }
+}
+
 function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, columnIndex: number, timestamp: number) {
   const sprite = fireWallAppearSprite
   const fireY = y - sprite.height
   const fireX = x + sprite.width / 2
-  if (hex.state === "appearing") {
-    const struct = hex.animation
+  const struct = hex.animation
+  if (hex.state === "appearing" && struct.type === "once") {
     onAnimationTick(struct, timestamp)
 
     if (struct.runout) {
       hex.state = "fires"
-      hex.animation = {duration: fireWallDuration, frameCount: fireWallDisappearSprite.count, frame: 0, type: "once"}
+      hex.animation = {duration: fireWallDuration, frameCount: fireWallDisappearSprite.count, frame: 0, type: "repeating"}
       return
     }
 
@@ -4236,13 +4410,6 @@ function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, 
     const struct = hex.animation
     onAnimationTick(struct, timestamp)
 
-    if (struct.runout) {
-      struct.runout = false
-      struct.frame = 0
-      struct.timer = undefined
-      return
-    }
-
     availableHexes.drawImage(
       sprite.image,
       // xOffset + frame * xOffset + frame * frameWidth,
@@ -4255,9 +4422,8 @@ function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, 
       sprite.width,
       sprite.height
     )
-  } else {
+  } else if (struct.type === "once") {
     const sprite = fireWallDisappearSprite
-    const struct = hex.animation
     onAnimationTick(struct, timestamp)
 
     if (struct.runout) {
@@ -4268,12 +4434,15 @@ function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, 
       const type = hex.type;
       switch (type) {
         case "stackFireWall":
-          return removeHex(rowIndex, columnIndex, hex.stackHex)
+          return removeHexAt(rowIndex, columnIndex, hex.stackHex)
         case "obstacle":
         case "empty":
         case "stack":
+        case "quicksand":
+        case "stackQuicksand":
+          return
         case "fireWall":
-          return removeHex(rowIndex, columnIndex)
+          return removeHexAt(rowIndex, columnIndex)
         default:
           never(type)
       }
@@ -4373,7 +4542,7 @@ function drawElements(timestamp: number) {
               onAnimationTick(struct, timestamp)
 
               if (struct.runout) {
-                return removeHex(row, column)
+                return removeHexAt(row, column)
               }
 
               availableHexes.drawImage(
@@ -4403,6 +4572,11 @@ function drawElements(timestamp: number) {
         return drawFireWall(hex, x, y, row, column, timestamp)
       case "stackFireWall":
         drawFireWall(hex.fireWall, x, y, row, column, timestamp)
+        return drawStack(hex.stackHex, x, y)
+      case "quicksand":
+        return drawQuicksand(hex, x, y, row, column, timestamp)
+      case "stackQuicksand":
+        drawQuicksand(hex.quicksand, x, y, row, column, timestamp)
         return drawStack(hex.stackHex, x, y)
       default:
         never(type)
@@ -4784,6 +4958,7 @@ function updateUi() {
       case "summonEarthElement":
       case "summonWaterElement":
       case "summonFireElement":
+      case "quicksand":
         break
       default:
         never(spell)
@@ -4921,7 +5096,7 @@ function drawBattlefield(timestamp: number) {
     })
   }
   // get rid of it
-  bookBtn.disabled = currentSidePlaying() && game.heroesCastedSpell.includes(stackOwnerHero(selected()))
+  bookBtn.disabled = false
   if (game.type === "battle") {
     waitedBtn.disabled = game.waited.includes(selected())
   }
@@ -5026,6 +5201,28 @@ type Game = BaseGame & {
   attackType: { default: AttackType, selected?: AttackType }
 }
 
+function startGame(): Game {
+  const game = initializedGame()
+
+  const allyLevel = game.ally.skills.find(i => i.type === "tactic")?.level || 0
+  const foeLevel = game.foe.skills.find(i => i.type === "tactic")?.level || 0
+  if (allyLevel === foeLevel) {
+    return game
+  }
+  endTacticBtn.style.display = "initial"
+  nextStackBtn.style.display = "initial"
+  bookBtn.disabled = true
+  defenceBtn.disabled = true
+  waitedBtn.disabled = true
+
+  return {
+    ...game,
+    type: "tactic",
+    side: allyLevel > foeLevel ? ally() : foe(),
+    level: Math.abs(allyLevel - foeLevel),
+  }
+}
+
 function initializedGame(): Game {
   const ally = makeAlly()
   const foe = makeFoe()
@@ -5111,7 +5308,7 @@ const playingSideName: "ally" | "foe" = (new URL(window.location.href).searchPar
 type BroadcastEvent =
   | { type: "action", action: BroadcastAction }
   | { type: "joined" }
-  | { type: "game", game: Game, ally: Side, foe: Side, hexes: Hex[], hexesOfDead: typeof hexesOfDead }
+  | { type: "game", game: Game, hexes: Hex[], hexesOfDead: typeof hexesOfDead }
 
 let receivedGame = false
 
@@ -5137,7 +5334,7 @@ function start() {
       case "action":
         return doBroadcastAction(data.action)
       case "joined":
-        return broadcastEvent({type: "game", game, hexes: globalHexes, hexesOfDead, ally: ally(), foe: foe()})
+        return broadcastEvent({type: "game", game, hexes: globalHexes, hexesOfDead})
       case "game":
         if (receivedGame || data.game.type === "ended") {
           return
@@ -5253,6 +5450,9 @@ battlefield.addEventListener("mousemove", e => {
         return
       }
       const spell = game.spell
+      if (spell === "quicksand") {
+        return
+      }
       if (spell === "frostRing") {
         return drawCeilHover(hovered)
       }
