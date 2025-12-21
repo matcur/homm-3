@@ -151,7 +151,7 @@ const speeds: Record<RealStackType, number> = {
   griffin: 10,
   vampire: 8,
   pikeman: 6,
-  archer: 5,
+  archer: 20,
   enhancedArcher: 7,
   airElement: 8,
   fireElement: 7,
@@ -690,6 +690,9 @@ async function chase(target: Stack): Promise<"attacked" | "chasing"> {
 }
 
 async function onTurnStarted() {
+  if (preExecuting) {
+    return
+  }
   const current = selected();
   const type: StackType = current.type;
   if (currentSide().skills.find(i => i.type === "machine")) {
@@ -1537,6 +1540,23 @@ const battleStartAudio = new Audio("./audio/battleStart.mp3")
 querySelector(".game").addEventListener("click", () => {
   // battleStartAudio.play()
 })
+let speedCoef = (() => {
+  return parseInt(localStorage.getItem("speedCoef") || "1")
+})()
+querySelector(".speed-1").addEventListener("click", () => {
+  changeSpeedCoef(1)
+})
+querySelector(".speed-2").addEventListener("click", () => {
+  changeSpeedCoef(2)
+})
+querySelector(".speed-3").addEventListener("click", () => {
+  changeSpeedCoef(3)
+})
+
+function changeSpeedCoef(value: number) {
+  speedCoef = value
+  localStorage.setItem("speedCoef", String(value))
+}
 
 const waitedBtn = querySelector<HTMLButtonElement>("button.wait")
 waitedBtn.addEventListener("click", () => {
@@ -2606,7 +2626,7 @@ function onAnimationTick(animation: AnimationStruct, timestamp: number) {
   switch (animation.type) {
     case "repeating": {
       const delta = timestamp - animation.timer
-      if (delta >= animation.duration) {
+      if (delta >= animation.duration / speedCoef) {
         animation.frame = animation.frame + 1
         animation.timer = timestamp
       }
@@ -2620,7 +2640,7 @@ function onAnimationTick(animation: AnimationStruct, timestamp: number) {
         return
       }
       const delta = timestamp - animation.timer
-      if (delta >= animation.duration) {
+      if (delta >= animation.duration / speedCoef) {
         animation.frame = animation.frame + 1
         animation.timer = timestamp
       }
@@ -2703,6 +2723,9 @@ function stackFromHexes(hexes: Hex[]): StackHex | undefined {
 }
 
 function onTurnFinishing(): Action {
+  if (preExecuting) {
+    return {type: "nextTurn"}
+  }
   const stack = selected();
   if (game.morale.includes(stack) || !getLucky(levelToProbability(stackOwnerHero(stack).morale))) {
     return {type: "nextTurn"}
@@ -4030,7 +4053,7 @@ function pathBetween({start, end}: PathBetweenArgs): Position[] {
 }
 
 function nearlyEqual(a: number, b: number, epsilon = flingCoefficient / 2) {
-  return Math.abs(a - b) <= epsilon
+  return Math.abs(a - b) <= epsilon * speedCoef
 }
 
 function forceMove(hex: StackHex) {
@@ -4052,7 +4075,7 @@ function drawArrowAnimation(from: Point, to: Point, onComplete: () => void) {
 
   function animate() {
     const elapsed = Date.now() - startTime
-    const progress = Math.min(elapsed / duration, 1)
+    const progress = Math.min(elapsed / (duration / speedCoef), 1)
 
     // Clear previous frame
     clearRect(animations)
@@ -4143,6 +4166,9 @@ function drawArrowAnimation(from: Point, to: Point, onComplete: () => void) {
 }
 
 function canFly(type: StackType) {
+  if (preExecuting) {
+    return true
+  }
   switch (type) {
     case "dragon":
     case "angel":
@@ -4193,6 +4219,7 @@ function isFoeStack(stack: Stack): boolean {
   return foe().army.includes(stack)
 }
 
+
 async function move(hex: Hex): Promise<void> {
   const stackHex = stackFromHexes([hex])
   if (!stackHex) {
@@ -4208,8 +4235,8 @@ async function move(hex: Hex): Promise<void> {
   const current = moving.current
   const target = moving.target
   if (canFly(stackHex.stack.type)) {
-    current.x += moving.xSpeed
-    current.y += moving.ySpeed
+    current.x += moving.xSpeed * speedCoef
+    current.y += moving.ySpeed * speedCoef
     drawStackInfo({
       ctx: units,
       x: current.x,
@@ -4231,8 +4258,8 @@ async function move(hex: Hex): Promise<void> {
     return
   }
   const {x, y} = normalizedVector(current, next)
-  current.x += x * walkingCoefficient
-  current.y += y * walkingCoefficient
+  current.x += x * walkingCoefficient * speedCoef
+  current.y += y * walkingCoefficient * speedCoef
   drawStackInfo({
     ctx: units,
     x: current.x,
@@ -4241,7 +4268,7 @@ async function move(hex: Hex): Promise<void> {
     fillStyle: stackHex.stack === selected() ? "red" : undefined,
     stack: stackHex.stack,
   })
-  if (!nearlyEqual(current.x, next.x, hexWidth / 10) || !nearlyEqual(current.y, next.y, hexHeight / 10)) {
+  if (!nearlyEqual(current.x, next.x, hexWidth / 10) || !nearlyEqual(current.y, next.y, hexHeight/ 10)) {
     return
   }
   const point = stackHex.moving?.path.splice(0, 1)[0]
@@ -5287,7 +5314,12 @@ async function doBroadcastAction(action: Action, force = false) {
   }
 }
 
-function start() {
+const preExecuteActions =
+  JSOG.parse(`[{"@id":"2","type":"chase","targetPosition":{"@id":"3","type":"stack","row":0,"column":14,"stack":{"@id":"4","id":7,"count":11,"type":"archer","lastHealth":12,"effects":[],"initialCount":11}}},{"@id":"6","type":"chase","targetPosition":{"@id":"7","type":"stack","row":0,"column":9,"stack":{"@id":"8","id":1,"count":9,"type":"dendroid","lastHealth":40,"effects":[{"@id":"14","type":"freeze","causer":{"@id":"12","id":8,"count":20,"type":"dendroid","lastHealth":9,"effects":[{"@id":"13","type":"freeze","causer":{"@ref":"8"}}],"initialCount":25}},{"@id":"19","type":"freeze","causer":{"@id":"20","id":9,"count":25,"type":"dendroid","lastHealth":40,"effects":[],"initialCount":25}},{"@id":"27","type":"freeze","causer":{"@id":"26","id":10,"count":10,"type":"dendroid","lastHealth":40,"effects":[],"initialCount":10}}],"initialCount":25}}},{"@id":"10","type":"chase","targetPosition":{"@id":"11","type":"stack","row":0,"column":10,"stack":{"@ref":"12"}}},{"@id":"16","type":"chase","targetPosition":{"@ref":"7"}},{"@id":"18","type":"chase","targetPosition":{"@ref":"11"}},{"@id":"22","type":"chase","targetPosition":{"@ref":"7"}},{"@id":"24","type":"chase","targetPosition":{"@id":"25","type":"stack","row":1,"column":9,"stack":{"@ref":"26"}}}]`)
+.slice(0, 6) as Action[];
+let preExecuting = false
+let preExecutingIndex = 0
+async function start() {
   broadcast.onmessage = async (e: MessageEvent<string>) => {
     const data: BroadcastEvent = JSOG.parse<BroadcastEvent>(e.data)
     const type = data.type
@@ -5312,6 +5344,14 @@ function start() {
   broadcastEvent({type: "joined"})
   updateUi()
   requestAnimationFrame(nextTick)
+
+  // preExecuting = true
+  // for (const action of preExecuteActions) {
+  //   await doAction(action)
+  //   preExecutingIndex++
+  // }
+  // preExecuting = false
+  // return
   onTurnStarted()
 }
 

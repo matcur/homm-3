@@ -163,7 +163,7 @@
       <canvas width="1440" height="919" class="canvas animations"></canvas>
       <canvas width="1440" height="919" class="canvas ended"></canvas>
       <canvas width="1440" height="60" class="queue"></canvas>
-      <div class="buttons">
+      <div class="buttons" style="align-items: flex-end">
         <span class="fps">FPS: 0</span>
         <button class="defence">Defence</button>
         <button class="wait">Wait</button>
@@ -172,6 +172,12 @@
         <button class="next-stack" style="display: none">Next stack</button>
         <button class="end-tactic" style="display: none">End tactic</button>
         <button class="attack-type" style="display: none">Hand attack</button>
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          Speed
+          <button class="speed-1">1</button>
+          <button class="speed-2">2</button>
+          <button class="speed-3">3</button>
+        </div>
       </div>
       <div class="book closed-book"></div>
     </div>
