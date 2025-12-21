@@ -151,7 +151,7 @@ const speeds: Record<RealStackType, number> = {
   griffin: 10,
   vampire: 8,
   pikeman: 6,
-  archer: 20,
+  archer: 5,
   enhancedArcher: 7,
   airElement: 8,
   fireElement: 7,
@@ -378,6 +378,7 @@ type MagicEffectSpell =
   | "airShield"
   | "hypnotize"
   | "antiMagic"
+  | "resurrection"
   | "forgetfulness"
 
 type Spell =
@@ -393,6 +394,7 @@ type Spell =
 
 const spellSchool: Record<Spell, MagicSchool> = {
   meteorShower: "earth",
+  resurrection: "earth",
   forgetfulness: "water",
   antiMagic: "earth",
   teleport: "water",
@@ -618,8 +620,8 @@ function casualties(): { ally: Casualties, foe: Casualties } {
 
   function deadStacks(owner: Side): Stack[] {
     return hexesOfDead
-      .filter(i => i.owner === owner && i.stack.type !== "clone")
-      .map(i => i.stack)
+      .filter(i => i.owner === owner && i.hex.stack.type !== "clone")
+      .map(i => i.hex.stack)
   }
 
   return {
@@ -1235,6 +1237,10 @@ function applyMagicEffect(args: MagicEffect): Action {
       })
       return {type: spelling, targets: args.targets}
     }
+    case "resurrection": {
+      heal({stack: args.targets[0], value: spellLevel("resurrection") * 40})
+      return {type: "resurrectionAnimation", target: args.targets[0]}
+    }
     default:
       never(spelling)
   }
@@ -1426,7 +1432,7 @@ interface Side {
 
 function makeAlly(): Side {
   return {
-    type: "computer",
+    type: "player",
     hero: {
       name: "Rudolf",
       defence: 3,
@@ -1442,14 +1448,16 @@ function makeAlly(): Side {
       {type: "air", level: 3},
     ],
     army: [
-      stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
     ],
     spells: [
+      "resurrection",
       "arrow",
       "meteorShower",
       "quicksand",
@@ -1475,11 +1483,12 @@ function makeFoe(): Side {
     },
     army: [
       stack,
-      stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
       stackOf("dendroid", 10),
-      stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
+      stackOf("dendroid", 1),
     ],
     skills: [],
     spells: ["arrow", "slow"],
@@ -1504,6 +1513,7 @@ const appearedQuicksandSprite = {image: imageOf("appearedQuicksand"), width: 47,
 const disappearingQuicksandSprite = {image: imageOf("disappearingQuicksand"), width: 47, height: 41, count: 4}
 const heroesSprite = {image: imageOf("heroes"), width: 150, height: 183, count: 20}
 const berserkSprite = {image: imageOf("berserk"), width: 61, height: 99, count: 12}
+const resurrectionSprite = {image: imageOf("resurrection"), width: 98, height: 95, count: 19}
 const hypnotizeSprite = {image: imageOf("hypnotize"), width: 99, height: 90, count: 19}
 const antiMagicSprite = {image: imageOf("antiMagic"), width: 94, height: 126, count: 16}
 const forgetfulnessSprite = {image: imageOf("forgetfulness"), width: 119, height: 75, count: 15}
@@ -1603,7 +1613,7 @@ const defaultSeed = 16
 let game: Game = initializedGame();
 
 let globalHexes: Hex[] = []
-let hexesOfDead: { owner: Side, row: number, column: number, stack: Stack }[] = []
+let hexesOfDead: {hex: StackHex, owner: Side}[] = []
 const lastRowIndex = 10
 const lastColumnIndex = 14
 
@@ -1618,7 +1628,7 @@ for (let i = 0; i <= lastRowIndex; i++) {
 
 // place army
 (() => {
-  const rows = [0, 3, 5, 6, 7, 9]
+  const rows = [0, 2, 4, 5, 6, 8, 10]
   ally().army.forEach((i, index) => {
     globalHexes.push({type: "stack", row: rows[index], column: 0, stack: i});
   })
@@ -1751,9 +1761,10 @@ type BaseAction =
   // TODO: Unimplemented
   | { type: "clone", target: Stack }
   | { type: "hypnotize", target: Stack }
+  | { type: "resurrectionAnimation", target: Stack }
   | { type: "forgetfulness", target: Stack }
   | { type: "frostRing", point: ClickedHex }
-  | { type: "slow" | "hast" | "bless" | "rage" | "airShield" | "arrow", targets: Stack[] }
+  | { type: "slow" | "hast" | "bless" | "rage" | "airShield" | "arrow" , targets: Stack[] }
   | { type: "antiMagic", target: Stack }
   | { type: "reflect", source: Stack, effects: Action[] }
   | { type: "hitBack", args: CloseAttackArgs }
@@ -2458,8 +2469,9 @@ function isEmptyHex(clickedHex: ClickedHex, direction: Direction) {
   return hexesAt(addDirection(clickedHex, direction)).every(i => i.type === "empty")
 }
 
-function hexesAt(position: Position): Hex[] {
-  return hexesAtRowColumn(position.row, position.column)
+// TODO: rewrite to args
+function hexesAt(position: Position, hexes: Hex[] = globalHexes): Hex[] {
+  return hexesAtRowColumn(position.row, position.column, hexes)
 }
 
 function stepHexAt(row: number, column: number): Hex | undefined {
@@ -2471,13 +2483,14 @@ function stepHexAt(row: number, column: number): Hex | undefined {
   return hexes[0]
 }
 
-function hexesAtRowColumn(row: number, column: number): Hex[] {
+// TODO: rewrite to args
+function hexesAtRowColumn(row: number, column: number, hexes: Hex[] = globalHexes): Hex[] {
   if (row > lastRowIndex || column < 0) {
     return [emptyHex(row, column)]
   }
   const res: Hex[] = []
-  for (let i = 0; i < globalHexes.length; i++) {
-    const item = globalHexes[i]
+  for (let i = 0; i < hexes.length; i++) {
+    const item = hexes[i]
     const type = item.type;
     switch (type) {
       case "empty":
@@ -2879,11 +2892,25 @@ function isEmptyPosition(position: Position) {
   return hexesAt(position)[0]?.type === "empty"
 }
 
-async function doSpellOnPosition(action: SpellingAction) {
+async function doSpellOnPosition(action: SpellingAction): Promise<unknown> {
   const {spell, position} = action
   const stack = stackAtPosition(position)
   if (stack && !canTakeSpell({stack, spell})) {
     return
+  }
+  if (spell === "resurrection") {
+    let {target} = friendStackAt(position)
+    if (target) {
+      return applyMagicEffect({targets: [target], spell: "resurrection", caster: currentSide()})
+    }
+    target = stackAtPosition(position, hexesOfDead.map(i => i.hex))
+    const index = hexesOfDead.findIndex(i => i.owner === currentSide() && i.hex.stack === target);
+    if (!target || index === -1) {
+      return
+    }
+    globalHexes.push(hexesOfDead[index].hex)
+    hexesOfDead.splice(index, 1)
+    return doAction(applyMagicEffect({targets: [target], spell: "resurrection", caster: currentSide()}))
   }
   if (spell === "meteorShower") {
     const attacker = stackOwner(selected())
@@ -3057,6 +3084,7 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
       case "antiMagic":
       case "hypnotize":
       case "teleport":
+      case "resurrection":
       case "berserk":
       case "meteorShower":
         game = {...game, type: "gameSpelling", spell}
@@ -3176,7 +3204,7 @@ async function doAction(action: Action): Promise<void> {
   }
 }
 
-async function internalDoAction(action: Action): Promise<void> {
+async function internalDoAction(action: Action): Promise<unknown> {
   switch (action.type) {
     case "fireTwiceAt":
     case "fireAt": {
@@ -3329,8 +3357,12 @@ async function internalDoAction(action: Action): Promise<void> {
       if (index === -1) {
         return
       }
+      const hex = hexesAt(position)[0]
+      if (hex?.type !== "stack") {
+        throw new Error("Expect stack")
+      }
       globalHexes.splice(index, 1)
-      hexesOfDead.push({...position, stack: dead, owner})
+      hexesOfDead.push({hex, owner})
       return
     }
     case "nextTurn": {
@@ -3734,6 +3766,28 @@ async function internalDoAction(action: Action): Promise<void> {
       await chase(target)
       return
     }
+    case "resurrectionAnimation": {
+      const sprite = resurrectionSprite
+      const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
+      const position = positionToPoint(positionOf(action.target))
+      return drawAnimation({
+        struct,
+        draw() {
+          animations.drawImage(
+            sprite.image,
+            // xOffset + frame * xOffset + frame * frameWidth,
+            struct.frame * sprite.width,
+            0,
+            sprite.width,
+            sprite.height,
+            position.x,
+            position.y,
+            sprite.width,
+            sprite.height,
+          )
+        }
+      })
+    }
     default: {
       never(action)
     }
@@ -3744,8 +3798,9 @@ function stackAtRowColumn(row: number, column: number): Stack | undefined {
   return stackAtPosition({row, column})
 }
 
-function stackAtPosition(position: Position): Stack | undefined {
-  for (let hex of hexesAt(position)) {
+// TODO: rewrite to args
+function stackAtPosition(position: Position, hexes: Hex[] = globalHexes): Stack | undefined {
+  for (let hex of hexesAt(position, hexes)) {
     if (hex.type === "stack") {
       return hex.stack
     }
@@ -4573,7 +4628,7 @@ function drawElements(timestamp: number) {
 
   clearRect(deadUnits)
   hexesOfDead.forEach(item => {
-    const {row, column} = item
+    const {row, column} = item.hex
     deadUnits.save()
     deadUnits.filter = 'grayscale(100%)'
     drawStackInfo({
@@ -4582,7 +4637,7 @@ function drawElements(timestamp: number) {
       y: rowY(row),
       fillStyle: 'gray',
       flip: item.owner === foe(),
-      stack: item.stack,
+      stack: item.hex.stack,
     })
     deadUnits.restore()
   })
@@ -4951,6 +5006,14 @@ function updateUi() {
       case "summonFireElement":
       case "quicksand":
         break
+      case "resurrection":
+        ui.availableHexes = [
+          ...friendHexes(),
+          ...hexesOfDead
+            .filter(i => i.owner === currentSide())
+            .map<Position>(i => ({row: i.hex.row, column: i.hex.column}))
+        ]
+        break
       default:
         never(spell)
     }
@@ -5105,10 +5168,12 @@ function enemyStackAt(clicked: Position) {
   return {enemy, target}
 }
 
-function friendStackAt(clicked: Position) {
+function friendStackAt(position: Position): {friend: Side, target: Stack | undefined} {
   const friend = currentSide()
-  const targets = friend.army.map(i => ({...positionOf(i), type: "attackable", target: i}))
-  const target = targets.find(i => samePositions(i, clicked))?.target
+  const target = stackAtPosition(position)
+  if (!target || !friend.army.includes(target)) {
+    return {friend, target: undefined}
+  }
   return {friend, target}
 }
 
@@ -5150,10 +5215,11 @@ function openBook() {
     const element = document.createElement("div")
     element.classList.add("spell")
     element.innerText = spell
-    element.addEventListener("click", () => {
+    element.addEventListener("click", async () => {
       closeBook()
       const action: SpellSelectedAction = {type: "spellSelected", spell}
-      doAction(action)
+      await doAction(action)
+      updateUi()
       broadcastEvent({type: "action", action})
     })
     book.appendChild(element)
@@ -5520,6 +5586,12 @@ battlefield.addEventListener("mousemove", e => {
         case "summonWaterElement":
         case "summonFireElement":
           return
+        case "resurrection": {
+          if (!ui.availableHexes.some(i => samePositions(i, hovered))) {
+            return
+          }
+          return drawCeilHover(hovered)
+        }
         default:
           return never(spell)
       }
