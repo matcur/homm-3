@@ -1595,23 +1595,15 @@ for (let i = 0; i <= lastRowIndex; i++) {
 }
 
 // place army
-globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]});
-globalHexes.push({type: "stack", row: 3, column: 0, stack: ally().army[1]});
-globalHexes.push({type: "stack", row: 5, column: 0, stack: ally().army[2]});
-globalHexes.push({type: "stack", row: 6, column: 0, stack: ally().army[3]});
-globalHexes.push({type: "stack", row: 7, column: 0, stack: ally().army[4]});
-globalHexes.push({type: "stack", row: 9, column: 0, stack: ally().army[5]});
-// globalHexes.push({ type: "stack", row: 2, column: 0, stack: ally().army[1] });
-// globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
-// globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
-globalHexes.push({type: "stack", row: 0, column: lastColumnIndex, stack: foe().army[0]});
-globalHexes.push({type: "stack", row: 3, column: lastColumnIndex, stack: foe().army[1]});
-globalHexes.push({type: "stack", row: 5, column: lastColumnIndex, stack: foe().army[2]});
-globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
-globalHexes.push({type: "stack", row: 7, column: lastColumnIndex, stack: foe().army[4]});
-globalHexes.push({type: "stack", row: 9, column: lastColumnIndex, stack: foe().army[5]});
-// globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
-// globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
+(() => {
+  const rows = [0, 3, 5, 6, 7, 9]
+  ally().army.forEach((i, index) => {
+    globalHexes.push({type: "stack", row: rows[index], column: 0, stack: i});
+  })
+  foe().army.forEach((i, index) => {
+    globalHexes.push({type: "stack", row: rows[index], column: lastColumnIndex, stack: i});
+  })
+})()
 
 
 // endregion
@@ -1743,6 +1735,7 @@ type BaseAction =
   | { type: "antiMagic", target: Stack }
   | { type: "reflect", source: Stack, effects: Action[] }
   | { type: "hitBack", args: CloseAttackArgs }
+  | { type: "cloneAttacked", stack: Cloned }
   | { type: "stopped", receiver: Stack }
   | MoralAction
   | FlameAction
@@ -1765,7 +1758,6 @@ type BroadcastAction =
   | { type: "empty" }
   | SpellingAction
   | { type: "resistance", stackPoint: Point }
-  | { type: "cloneAttacked", stack: Cloned }
 
 type Action = ((BroadcastAction | BaseAction) & { executing?: boolean })
 
@@ -2410,16 +2402,25 @@ function moveSelectedStack(action: Action, target: Position): Promise<void> {
     xSpeed: x * flingCoefficient,
     ySpeed: y * flingCoefficient,
   }
-  return new Promise(res => {
-    async function animate() {
-      await move(stackHex)
-      if (!stackHex.moving) {
-        return res()
-      }
-      requestAnimationFrame(animate)
+  return animate(async (_, end) => {
+    await move(stackHex)
+    if (!stackHex.moving) {
+      return end()
     }
+  })
+}
 
-    requestAnimationFrame(animate)
+function animate(func: (timestamp: number, endAnimation: () => void) => Promise<void> | undefined | void) {
+  return new Promise<void>(res => {
+    inAnimation = true
+    async function tick(timestamp: number) {
+      await func(timestamp, res)
+      requestAnimationFrame(tick)
+    }
+    updateUi()
+    requestAnimationFrame(tick)
+  }).then(() => {
+    inAnimation = false
   })
 }
 
@@ -2671,30 +2672,25 @@ async function drawAnimation({struct, draw}: {
 }): Promise<void> {
   inAnimation = true
 
-  return new Promise<void>((resolve) => {
-    function animate(timestamp: number) {
-      clearRect(animations)
-      onAnimationTick(struct, timestamp)
-      switch (struct.type) {
-        case "repeating":
-          break;
-        case "once": {
-          if (!struct.runout) {
-            break
-          }
-          inAnimation = false
-          resolve()
-          return
+  return animate((timestamp, end) => {
+    clearRect(animations)
+    onAnimationTick(struct, timestamp)
+    switch (struct.type) {
+      case "repeating":
+        break;
+      case "once": {
+        if (!struct.runout) {
+          break
         }
-        default: {
-          never(struct)
-        }
+        inAnimation = false
+        end()
+        return
       }
-      draw()
-      requestAnimationFrame(animate)
+      default: {
+        never(struct)
+      }
     }
-
-    requestAnimationFrame(animate)
+    draw()
   })
 }
 
@@ -2809,33 +2805,27 @@ function drawAttackSpell({spell, from, to}: { spell: "arrow" | "lightning", from
       const sprite = arrowSprite
       const struct: AnimationStruct = {duration: 60, frameCount: sprite.count, frame: 0, type: "repeating"}
       inAnimation = true
-      return new Promise(res => {
-        function animate(timestamp: number) {
+      return animate((timestamp, end) => {
+        clearRect(animations)
+        onAnimationTick(struct, timestamp)
+        current.x += x
+        current.y += y
+        animations.drawImage(
+          sprite.image,
+          // xOffset + frame * xOffset + frame * frameWidth,
+          struct.frame * sprite.width,
+          0,
+          sprite.width,
+          sprite.height,
+          current.x,
+          current.y,
+          sprite.width,
+          sprite.height
+        )
+        if (nearlyEqual(current.x, to.x, arrowCoefficient) && nearlyEqual(current.y, to.y, arrowCoefficient)) {
           clearRect(animations)
-          onAnimationTick(struct, timestamp)
-          current.x += x
-          current.y += y
-          animations.drawImage(
-            sprite.image,
-            // xOffset + frame * xOffset + frame * frameWidth,
-            struct.frame * sprite.width,
-            0,
-            sprite.width,
-            sprite.height,
-            current.x,
-            current.y,
-            sprite.width,
-            sprite.height
-          )
-          if (nearlyEqual(current.x, to.x, arrowCoefficient) && nearlyEqual(current.y, to.y, arrowCoefficient)) {
-            inAnimation = false
-            clearRect(animations)
-            return res()
-          }
-          requestAnimationFrame(animate)
+          return end()
         }
-
-        requestAnimationFrame(animate)
       })
     }
     case "lightning":
@@ -3890,23 +3880,16 @@ async function drawFlame(action: FlameAction): Promise<void> {
   )
   const startMs = Date.now()
 
-  return new Promise<void>((resolve) => {
-    function loop() {
-      if (Date.now() - startMs > flame.ttl + 1000) {
-        clearRect(animations)
-        inAnimation = false
-        resolve()
-        return
-      } // fewer emitted
-      if (!flame.update()) {
-        requestAnimationFrame(loop)
-        return
-      }
-      flame.draw(animations)
-      requestAnimationFrame(loop)
+  return animate((_, end) =>  {
+    if (Date.now() - startMs > flame.ttl + 1000) {
+      clearRect(animations)
+      end()
+      return
     }
-
-    loop()
+    if (!flame.update()) {
+      return
+    }
+    flame.draw(animations)
   })
 }
 
