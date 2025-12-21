@@ -49,7 +49,7 @@ type StackType = Stack["type"]
 
 type Effect =
   | { type: "berserk" }
-  | { type: "freeze", causer: Stack }
+  | { type: "freeze", causers: Stack[] }
   | { type: "aging", duration: number }
   | { type: "hypnotize", duration: number }
   | { type: "rage", duration: number }
@@ -963,12 +963,14 @@ function singleAttack(args: SingleAttackArgs): Action[] {
   const baseDamage = attackOf(args) * toRealStack(attacker).count
   const result = [applyDamage({damage: Math.round(baseDamage + baseDamage * attack), receiver: defender})]
   if (result[0]?.type !== "receiverDead"  && attacker.type === "dendroid") {
-    let effect = toRealStack(defender).effects.filter(i => i.type === "freeze")
-    if (!effect.length) {
+    let effect = effectIn(defender, "freeze")
+    if (!effect) {
+      effect = {type: "freeze", causers: [attacker]}
+      toRealStack(defender).effects.push(effect)
       result.push({type: "stopped", receiver: defender})
     }
-    if (effect.every(i => i.causer !== attacker)) {
-      toRealStack(defender).effects.push({type: "freeze", causer: attacker})
+    if (effect.causers.every(i => i !== attacker)) {
+      effect.causers.push(attacker)
     }
   }
   return result
@@ -2858,6 +2860,17 @@ function drawAttackSpell({spell, from, to}: { spell: "arrow" | "lightning", from
   }
 }
 
+function unattachFreeze(freeze: Stack, causer: Stack) {
+  const effect = effectIn(freeze, "freeze")
+  if (!effect) {
+    return
+  }
+  removeFromArray(effect.causers, causer)
+  if (effect.causers.length === 0) {
+    removeEffect(toRealStack(freeze).effects, "freeze")
+  }
+}
+
 function downPoint(point: Point, value: number) {
   return {...point, x: point.x - value}
 }
@@ -3141,9 +3154,9 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
   game = {...game, type: "gameSpelling", spell}
   return
 }
-
 //@ts-expect-error
 window.__actionExecuted = false
+
 let entered = false
 
 async function doAction(action: Action): Promise<void> {
@@ -3231,12 +3244,7 @@ async function internalDoAction(action: Action): Promise<void> {
           if (!stack) {
             return
           }
-          const effect = effectIn(stack, "freeze")
-
-          if (!effect || effect.causer !== selected()) {
-            return
-          }
-          removeFromArray(toRealStack(stack).effects, effect)
+          unattachFreeze(stack, selected());
         })
       }
       return await moveSelectedStack(action, action.position)
@@ -3314,11 +3322,7 @@ async function internalDoAction(action: Action): Promise<void> {
           if (!i) {
             return
           }
-          const effect = effectIn(i, "freeze");
-          if (!effect || effect.causer !== dead) {
-            return
-          }
-          removeFromArray(toRealStack(i).effects, effect)
+          unattachFreeze(i, dead);
         })
       }
       const index = globalHexes.findIndex(i => stackFromHex(i) === dead);
