@@ -551,10 +551,6 @@ function nextRound() {
       case "fireWall":
       case "quicksand":
         return removeExpiredHex(hex.row, hex.column, hex)
-      case "stackFireWall":
-        return removeExpiredHex(hex.row, hex.column, hex.fireWall, hex.stackHex)
-      case "stackQuicksand":
-        return removeExpiredHex(hex.row, hex.column, hex.quicksand, hex.stackHex)
       default:
         never(hex)
     }
@@ -709,12 +705,9 @@ async function onTurnStarted() {
   if (effectIn(current, "berserk")) {
     const target = closestStack({from: current, excludes: [current]})
     if (!target) {
-      return
+      throw new Error("Can't find berserk target")
     }
-    if (await chase(target) === "chasing") {
-      return
-    }
-    return removeEffect({effects: toRealStack(current).effects, removing: "berserk"})
+    return doTopLevelAction({type: "berserkChase", targetPosition: positionOf(target)})
   }
   switch (type) {
     case "ballista": {
@@ -740,12 +733,11 @@ async function onTurnStarted() {
     }
     default: {
       const position = positionOf(current)
-      const hex = hexAt(position);
-      const stack = stackFromHex(hex)
-      if (!stack || !hex) {
+      const stack = stackAtPosition(position)
+      if (!stack) {
         return
       }
-      await stackSteppingOn({hex, stack})
+      await stackSteppingOn({position, stack})
       const side = currentSide()
       if (side.type !== "computer") {
         return
@@ -754,7 +746,7 @@ async function onTurnStarted() {
       if (!closest) {
         throw new Error("Can't find target")
       }
-      return chase(closest)
+      return await doTopLevelAction({type: "chase", targetPosition: positionOf(closest)})
     }
   }
 }
@@ -967,9 +959,14 @@ function singleAttack(args: SingleAttackArgs): Action[] {
   const attack = fromDiapason(defenderHero.defence + defenceOf(defender) - attackerHero.attack, -9, 9) / 10
   const baseDamage = attackOf(args) * toRealStack(attacker).count
   const result = [applyDamage({damage: Math.round(baseDamage + baseDamage * attack), receiver: defender})]
-  if (result[0]?.type !== "receiverDead" && !effectIn(defender, "freeze") && attacker.type === "dendroid") {
-    toRealStack(defender).effects.push({type: "freeze", causer: attacker})
-    result.push({type: "stopped", receiver: defender})
+  if (result[0]?.type !== "receiverDead"  && attacker.type === "dendroid") {
+    let effect = toRealStack(defender).effects.filter(i => i.type === "freeze")
+    if (!effect.length) {
+      result.push({type: "stopped", receiver: defender})
+    }
+    if (effect.every(i => i.causer !== attacker)) {
+      toRealStack(defender).effects.push({type: "freeze", causer: attacker})
+    }
   }
   return result
 }
@@ -1032,7 +1029,7 @@ function stackFromHex(hex: Hex | undefined): Stack | undefined {
   if (!hex) {
     return
   }
-  return stackHexFrom(hex)?.stack
+  return stackFromHexes([hex])?.stack
 }
 
 function directAttack(args: SingleAttackArgs): Action[] {
@@ -1051,7 +1048,7 @@ function directAttack(args: SingleAttackArgs): Action[] {
     from: positionOf(attacker),
     to: hetAtPoint ? hetAtPoint : target
   })
-  const stack = stackFromHex(hetAtPoint.hex)
+  const stack = stackFromHexes(hetAtPoint.hexes)?.stack
   if (!stack) {
     return result
   }
@@ -1116,7 +1113,7 @@ function closestInRadius({row, column, radius, excludes}: ClosestInRadiusArgs): 
   const positions: (Position & { stack: Stack })[] = []
   grid.forEach((row, rowIndex) => {
     row.forEach((_, columnIndex) => {
-      const stack = stackFromHex(hexAtRowColumn(rowIndex, columnIndex))
+      const stack = stackAtPosition({row: rowIndex, column: columnIndex})
       if (stack && !excludes.includes(stack)) {
         positions.push({row: rowIndex, column: columnIndex, stack})
       }
@@ -1141,7 +1138,7 @@ interface MagicEffect {
   caster: Side
 }
 
-function removeEffect({effects, removing}: { effects: Effect[], removing: Effect["type"] }) {
+function removeEffect(effects: Effect[], removing: Effect["type"]) {
   const index = effects.findIndex(i => i.type === removing)
   if (index === -1) {
     return
@@ -1213,10 +1210,10 @@ function applyMagicEffect(args: MagicEffect): Action {
         target = toRealStack(target)
         switch (spelling) {
           case "slow":
-            removeEffect({effects: target.effects, removing: "hast"})
+            removeEffect(target.effects, "hast")
             break
           case "hast":
-            removeEffect({effects: target.effects, removing: "slow"})
+            removeEffect(target.effects, "slow")
             break
           case "bless":
           case "rage":
@@ -1424,7 +1421,7 @@ interface Side {
 
 function makeAlly(): Side {
   return {
-    type: "player",
+    type: "computer",
     hero: {
       name: "Rudolf",
       defence: 3,
@@ -1440,6 +1437,11 @@ function makeAlly(): Side {
       {type: "air", level: 3},
     ],
     army: [
+      stackOf("dendroid", 25),
+      stackOf("dendroid", 25),
+      stackOf("dendroid", 25),
+      stackOf("dendroid", 25),
+      stackOf("dendroid", 25),
       stackOf("dendroid", 25),
     ],
     spells: [
@@ -1468,7 +1470,11 @@ function makeFoe(): Side {
     },
     army: [
       stack,
-      stackOf("dendroid", 15),
+      stackOf("dendroid", 25),
+      stackOf("dendroid", 25),
+      stackOf("dendroid", 10),
+      stackOf("dendroid", 25),
+      stackOf("dendroid", 25),
     ],
     skills: [],
     spells: ["arrow", "slow"],
@@ -1543,7 +1549,7 @@ endTacticBtn.addEventListener("click", () => {
   bookBtn.disabled = true
   defenceBtn.disabled = true
   waitedBtn.disabled = true
-  game = initializedGame()
+  game = defaultGame()
   nextRound()
 })
 const nextStackBtn = querySelector("button.next-stack")
@@ -1572,7 +1578,7 @@ const unitsCanvas = querySelector<HTMLCanvasElement>("canvas.units")
 const units = unitsCanvas.getContext("2d")!
 const defaultSeed = 16
 
-let game: Game = startGame();
+let game: Game = initializedGame();
 
 let globalHexes: Hex[] = []
 let hexesOfDead: { owner: Side, row: number, column: number, stack: Stack }[] = []
@@ -1590,12 +1596,20 @@ for (let i = 0; i <= lastRowIndex; i++) {
 
 // place army
 globalHexes.push({type: "stack", row: 0, column: 0, stack: ally().army[0]});
-globalHexes.push(quicksandHex({row: 0, column: 1}));
+globalHexes.push({type: "stack", row: 3, column: 0, stack: ally().army[1]});
+globalHexes.push({type: "stack", row: 5, column: 0, stack: ally().army[2]});
+globalHexes.push({type: "stack", row: 6, column: 0, stack: ally().army[3]});
+globalHexes.push({type: "stack", row: 7, column: 0, stack: ally().army[4]});
+globalHexes.push({type: "stack", row: 9, column: 0, stack: ally().army[5]});
 // globalHexes.push({ type: "stack", row: 2, column: 0, stack: ally().army[1] });
 // globalHexes.push({ type: "stack", row: 4, column: 0, stack: ally().army[2] });
 // globalHexes.push({ type: "stack", row: 6, column: 0, stack: ally().army[3] });
 globalHexes.push({type: "stack", row: 0, column: lastColumnIndex, stack: foe().army[0]});
-globalHexes.push({type: "stack", row: 2, column: lastColumnIndex, stack: foe().army[1]});
+globalHexes.push({type: "stack", row: 3, column: lastColumnIndex, stack: foe().army[1]});
+globalHexes.push({type: "stack", row: 5, column: lastColumnIndex, stack: foe().army[2]});
+globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
+globalHexes.push({type: "stack", row: 7, column: lastColumnIndex, stack: foe().army[4]});
+globalHexes.push({type: "stack", row: 9, column: lastColumnIndex, stack: foe().army[5]});
 // globalHexes.push({type: "stack", row: 4, column: lastColumnIndex, stack: foe().army[2]});
 // globalHexes.push({type: "stack", row: 6, column: lastColumnIndex, stack: foe().army[3]});
 
@@ -1741,6 +1755,8 @@ type BroadcastAction =
   | FireAtAction
   | FireTwiceAtAction
   | SpellSelectedAction
+  | { type: "berserkChase", targetPosition: Position}
+  | { type: "chase", targetPosition: Position}
   | { type: "berserk", target: Stack }
   | { type: "teleport", stackPosition: Position, targetPosition: Position }
   | { type: "moveTo", position: Position }
@@ -1818,24 +1834,7 @@ interface EmptyHex {
   column: number
 }
 
-// TODO: maybe change to {type: "multi", items: Hex[]} ?
-interface StackFireWallHex {
-  type: "stackFireWall"
-  stackHex: StackHex
-  fireWall: FireWallHex
-  row: number
-  column: number
-}
-
-interface StackQuicksandHex {
-  type: "stackQuicksand"
-  stackHex: StackHex
-  quicksand: QuicksandHex
-  row: number
-  column: number
-}
-
-type Hex = ObstacleHex | StackHex | FireWallHex | StackFireWallHex | QuicksandHex | StackQuicksandHex | EmptyHex
+type Hex = ObstacleHex | StackHex | FireWallHex | QuicksandHex  | EmptyHex
 
 const _emptyHexes: { [row_column: string]: EmptyHex } = {}
 
@@ -1918,11 +1917,7 @@ function positionsInRadius({position, radius}: { position: Position, radius: num
     }
     const {column, row, dist} = item
 
-    // Check if there's a hex at this position in globalHexes
-    const hex = hexAtRowColumn(row, column)
-    if (hex) {
-      result.push(hex)
-    }
+    result.push(...hexesAtRowColumn(row, column))
 
     // If we've reached the radius limit, don't explore further
     if (dist >= radius) {
@@ -1964,11 +1959,11 @@ function stackHexForPosition({position: {row, column}, excludes}: {
   for (let [nColumn, nRow] of directions[isEvenRow(row) ? "even" : "odd"]) {
     const newRow = row + nRow
     const newColumn = column + nColumn
-    const hex = hexAtRowColumn(newRow, newColumn)
+    const hex = hexesAtRowColumn(newRow, newColumn)
     if (!hex) {
       continue
     }
-    const stack = stackFromHex(hex)
+    const stack = stackAtPosition({row: newRow, column: newColumn})
     if (stack && !excludes.includes(stack)) {
       targets.push({stack, row: newRow, column: newColumn, type: "attackable"})
     }
@@ -2006,8 +2001,8 @@ interface AvailableHexPositionsFromArgs {
   type?: "stepOn" | "attackOn" | "moveToAttack"
 }
 
-function canStepOn(type: Hex["type"] | undefined) {
-  return type === "empty" || type === "fireWall" || type === "quicksand"
+function canStepOn(row: number, column: number): boolean {
+  return !hexesAtRowColumn(row, column).find(i => i.type === "stack" || i.type === "obstacle")
 }
 
 function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): AvailableHex[] {
@@ -2016,7 +2011,7 @@ function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): Availab
     if (game.side === ally()) {
       for (let row = 0; row <= lastRowIndex; row++) {
         for (let column = 0; column < (2 + game.level); column++) {
-          if (!canStepOn(hexAtRowColumn(row, column)?.type)) {
+          if (!canStepOn(row, column)) {
             continue
           }
           res.push({column, row})
@@ -2026,7 +2021,7 @@ function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): Availab
     }
     for (let row = 0; row <= lastRowIndex; row++) {
       for (let column = lastColumnIndex; column > (lastColumnIndex - 2 - game.level); column--) {
-        if (!canStepOn(hexAtRowColumn(row, column)?.type)) {
+        if (!canStepOn(row, column)) {
           continue
         }
         res.push({column, row})
@@ -2061,9 +2056,8 @@ function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): Availab
     const {column, row, dist} = item
 
     if (radius === 0 && type !== "stepOn") {
-      const hex = hexAt(item)
-      const stack = stackFromHex(hex)
-      if (!hex || !stack) {
+      const stack = stackAtPosition(item)
+      if (!stack) {
         return []
       }
       return stackHexFor({excludes: stackOwner(stack).army, attacker: stack})
@@ -2077,15 +2071,14 @@ function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): Availab
 
       if (nColumn < 0 || nRow < 0 || nColumn >= cols || nRow >= rows) continue
       if (visited[nRow][nColumn]) continue
-      const hex = hexAtRowColumn(nRow, nColumn)
-      const hexType = hex?.type
+      const hex = stepHexAt(nRow, nColumn)
       const stack = stackFromHex(hex)
       if (
-        type === "stepOn" && withObstacles && !canStepOn(hexType) ||
-        (type === "attackOn" || type === "moveToAttack") && withObstacles && !canStepOn(hexType) && !stack ||
-        stackWidth(selected()) === 2 && (
-          !canStepOn(hexAtRowColumn(nRow, nColumn + 1)?.type) &&
-          !canStepOn(hexAtRowColumn(nRow, nColumn - 1)?.type)
+        type === "stepOn" && withObstacles && !canStepOn(nRow, nColumn) ||
+        (type === "attackOn" || type === "moveToAttack") && withObstacles && !canStepOn(nRow, nColumn) && !stack || (
+          stackWidth(selected()) === 2 &&
+          !canStepOn(nRow, nColumn + 1) &&
+          !canStepOn(nRow, nColumn - 1)
         )
       ) {
         continue
@@ -2118,8 +2111,7 @@ function availableHexPositionsFrom(args: AvailableHexPositionsFromArgs): Availab
         for (const [dx, dy] of directions[isEvenRow(nRow) ? "even" : "odd"]) {
           const attackColumn = nColumn + dx
           const attackRow = nRow + dy
-          const hex = hexAtRowColumn(attackRow, attackColumn)
-          const stack = hex && stackFromHex(hex)
+          const stack = stackAtRowColumn(attackRow, attackColumn)
 
           if (visited[attackRow]?.[attackColumn]) {
             continue
@@ -2391,8 +2383,7 @@ function normalizedVector(currentCoordinate: Point, targetCoordinate: Point) {
 
 function moveSelectedStack(action: Action, target: Position): Promise<void> {
   const previous = positionOf(selected())
-  const hex = hexAt(previous)
-  const _hex = stackHexFrom(hex)
+  const _hex = stackFromHexes(hexesAt(previous))
   if (samePositions(previous, target) || !_hex) {
     return Promise.resolve()
   }
@@ -2441,45 +2432,52 @@ type ClickedHex = Position & { x: number, y: number }
 type Direction = [number, number]
 
 function isEmptyHex(clickedHex: ClickedHex, direction: Direction) {
-  return hexAt(addDirection(clickedHex, direction))?.type === "empty"
+  return hexesAt(addDirection(clickedHex, direction)).every(i => i.type === "empty")
 }
 
-function hexAt(position: Position): Hex | undefined {
-  return hexAtRowColumn(position.row, position.column)
+function hexesAt(position: Position): Hex[] {
+  return hexesAtRowColumn(position.row, position.column)
 }
 
-function hexAtRowColumn(row: number, column: number): Hex | undefined {
-  if (row > lastRowIndex || column < 0) {
-    return undefined
+function stepHexAt(row: number, column: number): Hex | undefined {
+  const hexes = hexesAtRowColumn(row, column);
+  const first = hexes.find(i => i.type === "stack" || i.type === "obstacle")
+  if (first) {
+    return first
   }
+  return hexes[0]
+}
+
+function hexesAtRowColumn(row: number, column: number): Hex[] {
+  if (row > lastRowIndex || column < 0) {
+    return [emptyHex(row, column)]
+  }
+  const res: Hex[] = []
   for (let i = 0; i < globalHexes.length; i++) {
     const item = globalHexes[i]
     const type = item.type;
     switch (type) {
-      case "stackFireWall":
-      case "stackQuicksand":
-        if (item.stackHex.row === row && item.stackHex.column === column) {
-          return item
-        }
-        break
       case "empty":
       case "obstacle":
       case "fireWall":
       case "quicksand":
         if (item.row === row && item.column === column) {
-          return item
+          res.push(item)
         }
         break
       case "stack":
         if (item.row === row && item.column === column || item.row === row && (item.column - stackWidth(item.stack) + 1) === column) {
-          return item
+          res.push(item)
         }
         break
       default:
         never(type)
     }
   }
-  return emptyHex(row, column)
+  if (res.length === 0) {
+    return [emptyHex(row, column)]
+  }
+  return res
 }
 
 function triangleClick(clickedHex: ClickedHex, currentPosition: Position) {
@@ -2494,14 +2492,14 @@ function triangleClick(clickedHex: ClickedHex, currentPosition: Position) {
     const direction = directions[isEvenRow(clickedHex.row) ? "even" : "odd"]
     const result = direction[i]
     const target = addDirection(clickedHex, result)
-    const hex = hexAt(target)
-    if (!hex) {
+    const hexes = hexesAt(target)
+    if (hexes.length === 0) {
       continue
     }
     if (samePositions(currentPosition, target)) {
       return result
     }
-    if (hex.type === "empty") {
+    if (hexes[0].type === "empty") {
       return result
     }
     const left = direction[(i + pointInHex - 1) % pointInHex]
@@ -2700,24 +2698,11 @@ async function drawAnimation({struct, draw}: {
   })
 }
 
-function stackHexFrom(hex: Hex | undefined): StackHex | undefined {
-  if (!hex) {
-    return
-  }
-  const type = hex.type
-  switch (type) {
-    case "obstacle":
-    case "empty":
-    case "fireWall":
-    case "quicksand":
-      return undefined
-    case "stack":
+function stackFromHexes(hexes: Hex[]): StackHex | undefined {
+  for (let hex of hexes) {
+    if (hex.type === "stack") {
       return hex
-    case "stackFireWall":
-    case "stackQuicksand":
-      return hex.stackHex
-    default:
-      never(type)
+    }
   }
 }
 
@@ -2864,6 +2849,10 @@ function downPoint(point: Point, value: number) {
   return {...point, x: point.x - value}
 }
 
+function isEmptyPosition(position: Position) {
+  return hexesAt(position)[0]?.type === "empty"
+}
+
 async function doSpellOnPosition(action: SpellingAction) {
   const {spell, position} = action
   const stack = stackAtPosition(position)
@@ -2971,22 +2960,22 @@ async function doSpellOnPosition(action: SpellingAction) {
       break
     }
     case "fireWall":
-      if (hexAt(position)?.type !== "empty") {
+      if (!isEmptyPosition(position)) {
         return
       }
-      globalHexes.push(fireWallHex(position))
+      globalHexes.unshift(fireWallHex(position))
       break
     case "quicksand":
-      if (hexAt(position)?.type !== "empty") {
+      if (!isEmptyPosition(position)) {
         return
       }
-      globalHexes.push(quicksandHex(position))
+      globalHexes.unshift(quicksandHex(position))
       break
     case "forceField":
-      if (hexAt(position)?.type !== "empty") {
+      if (!isEmptyPosition(position)) {
         return
       }
-      globalHexes.push({
+      globalHexes.unshift({
         ...position,
         type: "obstacle",
         kind: {
@@ -3058,8 +3047,7 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
             const row = Math.floor(random(50000 * attempts) * lastRowIndex)
             const column = Math.floor(random(50000 * attempts) * lastColumnIndex)
 
-            const existingHex = hexAtRowColumn(row, column)
-            if (existingHex && existingHex.type !== "empty") {
+            if (isEmptyPosition({row, column})) {
               continue
             }
             if (placed.some(p => p.row === row && p.column === column)) {
@@ -3069,7 +3057,7 @@ async function doSpellSelectedAction(action: SpellSelectedAction) {
               continue
             }
 
-            globalHexes.push(quicksandHex({row, column}))
+            globalHexes.unshift(quicksandHex({row, column}))
             placed.push({row, column})
           }
         }
@@ -3226,8 +3214,7 @@ async function internalDoAction(action: Action): Promise<void> {
           radius: 1,
           type: "attackOn"
         }).forEach(i => {
-          const hex = hexAt(i)
-          const stack = stackFromHex(hex)
+          const stack = stackAtPosition(i)
           if (!stack) {
             return
           }
@@ -3309,6 +3296,18 @@ async function internalDoAction(action: Action): Promise<void> {
       const owner = stackOwner(dead);
       const army = owner.army
       removeFromArray(army, dead)
+      if (dead.type === "dendroid") {
+        positionsInRadius({position, radius: 1}).map(i => stackAtPosition(i)).forEach(i => {
+          if (!i) {
+            return
+          }
+          const effect = effectIn(i, "freeze");
+          if (!effect || effect.causer !== dead) {
+            return
+          }
+          removeFromArray(toRealStack(i).effects, effect)
+        })
+      }
       const index = globalHexes.findIndex(i => stackFromHex(i) === dead);
       if (index === -1) {
         return
@@ -3327,8 +3326,8 @@ async function internalDoAction(action: Action): Promise<void> {
       if (position.row === -1) {
         return
       }
-      const hex = hexAt(position)
-      if (!hex || hex.type !== "stack") {
+      const hex = stackAtPosition(position)
+      if (!hex) {
         return
       }
       const sprite = freezingSprite
@@ -3512,7 +3511,7 @@ async function internalDoAction(action: Action): Promise<void> {
       const position = positionOf(action.target)
       let available: Position | undefined
       for (let column = position.column; column < grid[position.row].length; column++) {
-        if (canStepOn(hexAtRowColumn(position.row, column)?.type)) {
+        if (canStepOn(position.row, column)) {
           available = {row: position.row, column}
           break
         }
@@ -3520,7 +3519,7 @@ async function internalDoAction(action: Action): Promise<void> {
       if (!available) {
         return
       }
-      const hex = hexAt(available);
+      const hex = hexesAt(available)[0];
       if (!hex) {
         return
       }
@@ -3529,30 +3528,16 @@ async function internalDoAction(action: Action): Promise<void> {
       currentSide().army.push(clone)
       switch (type) {
         case "obstacle":
-        case "stackFireWall":
-        case "stackQuicksand":
         case "stack":
           return
         case "empty":
           globalHexes.push(stackHex(clone, available.row, available.column))
           return
         case "fireWall":
-          globalHexes.push({
-            row: hex.row,
-            column: hex.column,
-            type: "stackFireWall",
-            fireWall: hex,
-            stackHex: stackHex(clone, available.row, available.column)
-          })
+          globalHexes.push(stackHex(clone, available.row, available.column))
           return
         case "quicksand":
-          globalHexes.push({
-            row: hex.row,
-            column: hex.column,
-            type: "stackQuicksand",
-            quicksand: hex,
-            stackHex: stackHex(clone, available.row, available.column)
-          })
+          globalHexes.push(stackHex(clone, available.row, available.column))
           return
         default:
           never(type)
@@ -3684,19 +3669,18 @@ async function internalDoAction(action: Action): Promise<void> {
     }
     case "teleport": {
       const {targetPosition, stackPosition} = action
-      const hex = hexAtRowColumn(stackPosition.row, stackPosition.column);
-      if (!hex || hex.type !== "stack") {
+      const stack = stackAtRowColumn(stackPosition.row, stackPosition.column);
+      if (!stack) {
         return
       }
       removeHex(stackPosition)
-      globalHexes.push(stackHex(hex.stack, targetPosition.row, targetPosition.column))
+      globalHexes.push(stackHex(stack, targetPosition.row, targetPosition.column))
       return
     }
     case "berserk": {
       const sprite = berserkSprite
       const struct: AnimationStruct = {duration: 40, frameCount: sprite.count, frame: 0, type: "once"}
       const position = positionToPoint(positionOf(action.target))
-
       return drawAnimation({
         struct,
         draw() {
@@ -3715,31 +3699,50 @@ async function internalDoAction(action: Action): Promise<void> {
         }
       })
     }
+    case "berserkChase": {
+      const target = stackAtPosition(action.targetPosition)
+      if (!target) {
+        throw new Error("Can't find berserk target")
+      }
+      if (await chase(target) === "chasing") {
+        return
+      }
+      return removeEffect(toRealStack(selected()).effects, "berserk")
+    }
+    case "chase": {
+      const target = stackAtPosition(action.targetPosition)
+      if (!target) {
+        throw new Error("Can't find berserk target")
+      }
+      await chase(target)
+      return
+    }
     default: {
       never(action)
     }
   }
 }
 
-function stackAtPosition(position: Position): Stack | undefined {
-  const hex = hexAt(position)
-  if (!hex) {
-    return
-  }
-  const stack = stackFromHex(hex)
-  if (!stack) {
-    return
-  }
-  return stack
+function stackAtRowColumn(row: number, column: number): Stack | undefined {
+  return stackAtPosition({row, column})
 }
 
-type HexAtPoint = { hex: Hex, x: number, y: number } & Position
+function stackAtPosition(position: Position): Stack | undefined {
+  for (let hex of hexesAt(position)) {
+    if (hex.type === "stack") {
+      return hex.stack
+    }
+  }
+  return
+}
+
+type HexAtPoint = { hexes: Hex[], x: number, y: number } & Position
 
 function hexAtPoint(point: Point): HexAtPoint | undefined {
   for (let rowIndex = 0; rowIndex < grid.length; rowIndex++) {
     const row = grid[rowIndex]
     for (let columnIndex = 0; columnIndex < row.length; columnIndex++) {
-      const hex = hexAtRowColumn(rowIndex, columnIndex)
+      const hexes = hexesAtRowColumn(rowIndex, columnIndex)
       const vertex = allHexes[rowIndex][columnIndex]
       const center = getCenter(vertex)
       let inside = false
@@ -3753,10 +3756,10 @@ function hexAtPoint(point: Point): HexAtPoint | undefined {
       }
 
       if (inside) {
-        if (!hex) {
+        if (!hexes) {
           return
         }
-        return {hex, row: rowIndex, column: columnIndex, ...point}
+        return {hexes, row: rowIndex, column: columnIndex, ...point}
       }
     }
   }
@@ -4016,12 +4019,11 @@ function pathBetween({start, end}: PathBetweenArgs): Position[] {
       .map(([column, row]) => ({row: current.row + row, column: current.column + column}))
       .filter(
         n => {
-          const type = hexAt(n)?.type
           return (
             n.row >= 0 &&
             n.row <= lastRowIndex &&
             n.column >= 0 &&
-            n.column <= lastColumnIndex && canStepOn(type) ||
+            n.column <= lastColumnIndex && canStepOn(n.row, n.column) ||
             samePositions(n, end)
           )
         }
@@ -4048,41 +4050,14 @@ function nearlyEqual(a: number, b: number, epsilon = flingCoefficient / 2) {
   return Math.abs(a - b) <= epsilon
 }
 
-function forceMove(hex: Hex) {
-  const stackHex = stackHexFrom(hex)
-  if (!stackHex || !stackHex.moving) {
+function forceMove(hex: StackHex) {
+  if (!hex.moving) {
     return
   }
-  const {targetPosition} = stackHex.moving
-  const oldTarget = hexAt(targetPosition)
-  if (oldTarget?.type !== "empty" && globalHexes.findIndex(i => i === oldTarget) === -1 || !oldTarget) {
-    return
-  }
-  (() => {
-    stackHex.moving = undefined
-    switch (oldTarget.type) {
-      case "fireWall":
-        removeHex(oldTarget)
-        return globalHexes.push({type: "stackFireWall", stackHex, fireWall: oldTarget, ...targetPosition})
-      case "quicksand":
-        removeHex(oldTarget)
-        return globalHexes.push({type: "stackQuicksand", stackHex, quicksand: oldTarget, ...targetPosition})
-      case "stackQuicksand":
-        removeHex(oldTarget)
-        return globalHexes.push(oldTarget.quicksand)
-      case "stackFireWall":
-        removeHex(oldTarget)
-        return globalHexes.push(oldTarget.fireWall)
-      case "empty":
-      case "obstacle":
-      case "stack":
-        return globalHexes.push({...stackHex, ...targetPosition})
-      default:
-        never(oldTarget)
-    }
-  })()
-  stackHex.row = targetPosition.row
-  stackHex.column = targetPosition.column
+  const {targetPosition} = hex.moving
+  hex.row = targetPosition.row
+  hex.column = targetPosition.column
+  hex.moving = undefined
 }
 
 function drawArrowAnimation(from: Point, to: Point, onComplete: () => void) {
@@ -4204,29 +4179,31 @@ function canFly(type: StackType) {
   }
 }
 
-async function stackSteppingOn({hex, stack}: { hex: Hex, stack: Stack }): Promise<{ stopped: boolean }> {
-  switch (hex.type) {
-    case "empty":
-    case "obstacle":
-    case "stack":
-    case "stackQuicksand":
-      return Promise.resolve({stopped: false})
-    case "fireWall":
-    case "stackFireWall": {
-      await processActions(magicAttack({
-        spell: "fireWall",
-        target: stack,
-        receiver: stackOwner(stack),
-        attacker: stackEnemy(stack),
-      }))
-      return Promise.resolve({stopped: false})
-    }
-    case "quicksand":
-      return Promise.resolve({stopped: true})
-    default: {
-      never(hex)
+async function stackSteppingOn({position, stack}: { position: Position, stack: Stack }): Promise<{ stopped: boolean }> {
+  const hexes = hexesAt(position)
+  for (let hex of hexes) {
+    switch (hex.type) {
+      case "empty":
+      case "obstacle":
+      case "stack":
+        return Promise.resolve({stopped: false})
+      case "fireWall": {
+        await processActions(magicAttack({
+          spell: "fireWall",
+          target: stack,
+          receiver: stackOwner(stack),
+          attacker: stackEnemy(stack),
+        }))
+        return Promise.resolve({stopped: false})
+      }
+      case "quicksand":
+        return Promise.resolve({stopped: true})
+      default: {
+        never(hex)
+      }
     }
   }
+  return Promise.resolve({stopped: false})
 }
 
 function isFoeStack(stack: Stack): boolean {
@@ -4234,14 +4211,14 @@ function isFoeStack(stack: Stack): boolean {
 }
 
 async function move(hex: Hex): Promise<void> {
-  const stackHex = stackHexFrom(hex)
+  const stackHex = stackFromHexes([hex])
   if (!stackHex) {
     return
   }
   const moving = stackHex.moving
   if (!moving) {
     inAnimation = false
-    forceMove(hex)
+    forceMove(stackHex)
     return
   }
   inAnimation = true
@@ -4259,14 +4236,14 @@ async function move(hex: Hex): Promise<void> {
       flip: isFoeStack(stackHex.stack),
     })
     if (nearlyEqual(current.x, target.x) && nearlyEqual(current.y, target.y)) {
-      forceMove(hex)
+      forceMove(stackHex)
       inAnimation = false
     }
     return
   }
   const next = moving.path[0]
   if (!next) {
-    forceMove(hex)
+    forceMove(stackHex)
     inAnimation = false
     return
   }
@@ -4288,17 +4265,20 @@ async function move(hex: Hex): Promise<void> {
   if (!point) {
     return
   }
-  const targetHex = hexAtPoint(point)?.hex
+  const targetHex = hexAtPoint(point)?.hexes[0]
   if (!target || !targetHex) {
     return
   }
-  const res = await stackSteppingOn({hex: targetHex, stack: stackHex.stack})
+  if (samePositions(targetHex, moving.previousPosition)) {
+    return
+  }
+  const res = await stackSteppingOn({position: targetHex, stack: stackHex.stack})
   if (!res.stopped) {
     return
   }
   moving.targetPosition = {row: targetHex.row, column: targetHex.column}
   inAnimation = false
-  forceMove(hex)
+  forceMove(stackHex)
 }
 
 let inAnimation = false
@@ -4378,26 +4358,17 @@ function drawQuicksand(hex: QuicksandHex, x: number, y: number, row: number, col
   } else if (hex.state === "disappearing" && struct.type === "once") {
     onAnimationTick(struct, timestamp)
     if (struct.runout) {
-      const hex = hexAtRowColumn(row, column)
-      if (!hex) {
-        return
-      }
-      switch (hex.type) {
-        case "empty":
-        case "obstacle":
-        case "stack":
-        case "fireWall":
-        case "stackFireWall":
-          return
-        case "quicksand":
-          return removeHexAt(row, column)
-        case "stackQuicksand":
-          return removeHexAt(row, column, hex.stackHex)
-        default:
-          never(hex)
-      }
+      return removeHexByType(hexesAtRowColumn(row, column), "quicksand")
     }
     draw(disappearingQuicksandSprite)
+  }
+}
+
+function removeHexByType(hexes: Hex[], type: Hex["type"]) {
+  for (let hex of hexes) {
+    if (hex.type === type) {
+      return removeHex(hex)
+    }
   }
 }
 
@@ -4454,25 +4425,7 @@ function drawFireWall(hex: FireWallHex, x: number, y: number, rowIndex: number, 
     onAnimationTick(struct, timestamp)
 
     if (struct.runout) {
-      const hex = hexAtRowColumn(rowIndex, columnIndex)
-      if (!hex) {
-        return
-      }
-      const type = hex.type;
-      switch (type) {
-        case "stackFireWall":
-          return removeHexAt(rowIndex, columnIndex, hex.stackHex)
-        case "obstacle":
-        case "empty":
-        case "stack":
-        case "quicksand":
-        case "stackQuicksand":
-          return
-        case "fireWall":
-          return removeHexAt(rowIndex, columnIndex)
-        default:
-          never(type)
-      }
+      return removeHexByType(hexesAtRowColumn(rowIndex, columnIndex), "fireWall")
     }
 
     availableHexes.drawImage(
@@ -4597,14 +4550,8 @@ function drawElements(timestamp: number) {
         return drawStack(hex, x, y)
       case "fireWall":
         return drawFireWall(hex, x, y, row, column, timestamp)
-      case "stackFireWall":
-        drawFireWall(hex.fireWall, x, y, row, column, timestamp)
-        return drawStack(hex.stackHex, x, y)
       case "quicksand":
         return drawQuicksand(hex, x, y, row, column, timestamp)
-      case "stackQuicksand":
-        drawQuicksand(hex.quicksand, x, y, row, column, timestamp)
-        return drawStack(hex.stackHex, x, y)
       default:
         never(type)
     }
@@ -4891,8 +4838,9 @@ function emptyHexes(): AvailableHex[] {
   const res: AvailableHex[] = []
   grid.forEach((row, rowIndex) => {
     row.forEach(columnIndex => {
-      if (hexAtRowColumn(rowIndex, columnIndex)?.type === "empty") {
-        res.push({row: rowIndex, column: columnIndex})
+      const position = {row: rowIndex, column: columnIndex};
+      if (isEmptyPosition(position)) {
+        res.push(position)
       }
     })
   })
@@ -5230,8 +5178,8 @@ type Game = BaseGame & {
   attackType: { default: AttackType, selected?: AttackType }
 }
 
-function startGame(): Game {
-  const game = initializedGame()
+function initializedGame(): Game {
+  const game = defaultGame()
 
   const allyLevel = game.ally.skills.find(i => i.type === "tactic")?.level || 0
   const foeLevel = game.foe.skills.find(i => i.type === "tactic")?.level || 0
@@ -5252,7 +5200,7 @@ function startGame(): Game {
   }
 }
 
-function initializedGame(): Game {
+function defaultGame(): Game {
   const ally = makeAlly()
   const foe = makeFoe()
   const selected = gameQueueFor({
@@ -5348,6 +5296,7 @@ async function doBroadcastAction(action: Action, force = false) {
   if (actions.length > 1 && !force) {
     return
   }
+  topLevelActions.push(action)
   await doAction(action)
   removeFromArray(actions, action)
   if (actions.length > 0) {
@@ -5400,6 +5349,14 @@ function finished() {
   return game.type === "ended"
 }
 
+let topLevelActions: Action[] = []
+function doTopLevelAction(action: BroadcastAction) {
+  topLevelActions.push(action)
+  const res = doAction(action)
+  broadcastEvent({type: "action", action})
+  return res
+}
+
 battlefield.addEventListener("click", e => {
   if (stopped) {
     return
@@ -5408,8 +5365,7 @@ battlefield.addEventListener("click", e => {
   if (!action) {
     return
   }
-  doAction(action)
-  broadcastEvent({type: "action", action})
+  doTopLevelAction(action)
 })
 
 function broadcastEvent(event: BroadcastEvent) {
@@ -5439,10 +5395,11 @@ function actionFromClick(e: { clientX: number, clientY: number }): BroadcastActi
     return
   }
   const position: Position = {row: clicked.row, column: clicked.column}
-  if (game.type === "tactic" && clicked.hex.type === "stack" && stackOwner(clicked.hex.stack) === game.side) {
+  const hex = stackFromHexes(clicked.hexes)
+  if (game.type === "tactic" && hex && stackOwner(hex.stack) === game.side) {
     return {type: "select", stackPosition: position}
   }
-  if (game.type === "stackTeleporting" && clicked.hex.type === "empty") {
+  if (game.type === "stackTeleporting" && clicked.hexes[0]?.type === "empty") {
     return {type: "teleport", stackPosition: game.stackPosition, targetPosition: position}
   }
   if (game.type === "gameSpelling") {
@@ -5457,6 +5414,10 @@ function actionFromClick(e: { clientX: number, clientY: number }): BroadcastActi
   return {type: "clickAt", targetPosition: clicked, nextSelectedPosition: nextSelectedPosition(clicked)}
 }
 
+function hasHex(hexes: Hex[], type: Hex["type"]) {
+  return hexes.some(hex => hex.type === type)
+}
+
 battlefield.addEventListener("mousemove", e => {
   if (bookOpened() || inAnimation || finished() || !currentSidePlaying()) {
     return
@@ -5467,14 +5428,14 @@ battlefield.addEventListener("mousemove", e => {
     x: e.clientX - rect.left,
     y: e.clientY - rect.top
   })
-  if (!hovered || hovered.hex.type === "obstacle") {
+  if (!hovered || hasHex(hovered.hexes, "obstacle")) {
     drawCeilHover(undefined)
     return
   }
   const type = game.type;
   switch (type) {
     case "gameSpelling": {
-      const hex = hexAt(hovered)
+      const hex = hexesAt(hovered)
       if (!hex) {
         return
       }
@@ -5486,7 +5447,7 @@ battlefield.addEventListener("mousemove", e => {
         return drawCeilHover(hovered)
       }
       if (spell === "fireWall" || spell === "forceField") {
-        if (hex.type !== "empty") {
+        if (hex[0]?.type !== "empty") {
           return
         }
         return drawCeilHover(hovered)
@@ -5494,7 +5455,7 @@ battlefield.addEventListener("mousemove", e => {
       if (spell === "meteorShower") {
         return drawCeilsHover(meteorShowerAvailableHexes(hovered))
       }
-      const stack = stackFromHex(hex)
+      const stack = stackFromHexes(hex)?.stack
       if (!stack) {
         clearRect(availableHover)
         return
@@ -5537,7 +5498,7 @@ battlefield.addEventListener("mousemove", e => {
       }
     }
     case "stackTeleporting":
-      if (hexAt(hovered)?.type === "empty") {
+      if (isEmptyPosition(hovered)) {
         return drawCeilHover(hovered)
       }
       return
@@ -5564,7 +5525,7 @@ battlefield.addEventListener("mousemove", e => {
   if (!available) {
     return drawCeilHover(undefined)
   }
-  const stack = stackFromHex(hovered.hex)
+  const stack = stackFromHexes(hovered.hexes)?.stack
   if (currentAttackType() === "fire") {
     if (stack && stackOwner(stack) === currentSide()) {
       return drawCeilHover(undefined)
