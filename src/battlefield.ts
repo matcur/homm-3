@@ -1426,7 +1426,7 @@ interface Side {
 
 function makeAlly(): Side {
   return {
-    type: "computer",
+    type: "player",
     hero: {
       name: "Rudolf",
       defence: 3,
@@ -1436,7 +1436,7 @@ function makeAlly(): Side {
       spell: 4,
     },
     skills: [
-      {type: "tactic", level: 0},
+      {type: "tactic", level: 3},
       {type: "earth", level: 3},
       {type: "machine", level: 1},
       {type: "air", level: 3},
@@ -5201,6 +5201,7 @@ function initializedGame(): Game {
   if (allyLevel === foeLevel) {
     return game
   }
+  const side = allyLevel > foeLevel ? game.ally : game.foe
   endTacticBtn.style.display = "initial"
   nextStackBtn.style.display = "initial"
   bookBtn.disabled = true
@@ -5209,8 +5210,15 @@ function initializedGame(): Game {
 
   return {
     ...game,
+    selected: gameQueueFor({
+      elements: [
+        ...mapArmyToQueue(side, side === game.ally ? "ally" : "foe"),
+      ],
+      moved: [],
+      waited: [],
+    })[0],
     type: "tactic",
-    side: allyLevel > foeLevel ? ally() : foe(),
+    side,
     level: Math.abs(allyLevel - foeLevel),
   }
 }
