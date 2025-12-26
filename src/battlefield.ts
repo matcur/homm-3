@@ -1443,7 +1443,7 @@ function makeAlly(): Side {
     ],
     army: [
       stackOf("dendroid", 25),
-      stackOf("dendroid", 25),
+      stackOf("dragon", 25),
       stackOf("dendroid", 25),
       stackOf("dendroid", 25),
       stackOf("dendroid", 25),
@@ -1511,7 +1511,7 @@ const moraleSprite = {image: imageOf("morale"), width: 94, height: 127, count: 1
 const freezingSprite = {image: imageOf("freezing"), width: 74, height: 49, count: 27}
 const slowSprite = {image: imageOf("slow"), width: 74, height: 54, count: 20}
 const angelSprite = {image: imageOf("angel"), width: 100, height: 110, count: 2, gap: 50}
-const dragonSprite = {image: imageOf("dragon"), width: 177, height: 110, count: 4, gap: 50}
+const dragonSprite = {image: imageOf("dragon"), width: 170, height: 120, count: 4, gap: 10, yOffset: 670}
 const resurrectionSprite = {image: imageOf("resurrection"), width: 98, height: 95, count: 19}
 const arrowSprite = {image: imageOf("arrow"), width: 128, height: 33, count: 9}
 const dendroidSprite = {image: imageOf("dendroid"), width: 90, height: 115, count: 2, gap: 60, offset: 175}
@@ -4648,8 +4648,8 @@ function drawStackInfo({stack, flip, ctx, fillStyle, x, y}: DrawStackInfoArgs) {
       drawImage(
         ctx,
         sprite.image,
-        currentFrame * width,
-        25,
+        currentFrame * width + currentFrame * sprite.gap,
+        sprite.yOffset,
         width,
         sprite.height,
         x - width / 3 - (stackOwner(stack) === ally() ? hexWidth : 0),

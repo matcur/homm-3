@@ -10,10 +10,60 @@
             padding: 0;
             overflow: hidden;
         }
+        body {
+            position: relative;
+        }
+        .canvas {
+            position: absolute;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 1000px;
+            height: 800px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid gold;
+            z-index: 1000;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .modal.active {
+            display: block;
+        }
+        .modal-content {
+            color: white;
+            height: 100%;
+            overflow-y: auto;
+        }
+        .modal-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: red;
+            color: white;
+            border: none;
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .modal-close:hover {
+            background: darkred;
+        }
     </style>
 </head>
 <body>
-    <canvas height="919" width="1920" class="castle"></canvas>
+    <div class="town">
+        <canvas height="919" width="1920" class="background canvas"></canvas>
+    </div>
+    <div class="modal" id="buildingModal">
+        <button class="modal-close" id="modalClose">×</button>
+        <div class="modal-content" id="modalContent"></div>
+    </div>
     <script type="module" src="/dist/town.js?asdf"></script>
 </body>
 </html>
